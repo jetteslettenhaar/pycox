@@ -7,6 +7,7 @@ from pycox.datasets import from_simulations
 support = from_deepsurv._Support()
 metabric = from_deepsurv._Metabric()
 gbsg = from_deepsurv._Gbsg()
+simplemodel = from_deepsurv._SimpleModel()
 flchain = from_rdatasets._Flchain()
 nwtco = from_rdatasets._Nwtco()
 kkbox_v1 = from_kkbox._DatasetKKBoxChurn()

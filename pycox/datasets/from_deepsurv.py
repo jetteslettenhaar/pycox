@@ -11,28 +11,41 @@ class _DatasetDeepSurv(_DatasetLoader):
         'support': "support/support_train_test.h5",
         'metabric': "metabric/metabric_IHC4_clinical_train_test.h5",
         'gbsg': "gbsg/gbsg_cancer_train_test.h5",
+        'simplemodel': "my_models/simple_model.h5",
     }
     col_duration = 'duration'
     col_event = 'event'
     def _download(self):
-        url = self._dataset_url + self._datasets[self.name]
-        path = self.path.parent / f"{self.name}.h5"
-        with requests.Session() as s:
-            r = s.get(url)
-            with open(path, 'wb') as f:
-                f.write(r.content)
+        if self.name == 'simplemodel':
+            # Check if the Feather file already exists locally
+            feather_path = self.path.parent / f"{self.name}.feather"
+            if feather_path.exists():
+                print(f"The {self.name} dataset already exists locally.")
+                return
+            else:
+                # If not, create the Feather file
+                df = pd.DataFrame({"example_column": [1, 2, 3]})
+                df.to_feather(feather_path)
+                print(f"The {self.name} dataset has been created locally.")
+        else:
+            url = self._dataset_url + self._datasets[self.name]
+            path = self.path.parent / f"{self.name}.h5"
+            with requests.Session() as s:
+                r = s.get(url)
+                with open(path, 'wb') as f:
+                    f.write(r.content)
 
-        data = defaultdict(dict)
-        with h5py.File(path) as f:
-            for ds in f: 
-                for array in f[ds]:
-                    data[ds][array] = f[ds][array][:]
-        
-        path.unlink()
-        train = _make_df(data['train'])
-        test = _make_df(data['test'])
-        df = pd.concat([train, test]).reset_index(drop=True)
-        df.to_feather(self.path)
+            data = defaultdict(dict)
+            with h5py.File(path) as f:
+                for ds in f: 
+                    for array in f[ds]:
+                        data[ds][array] = f[ds][array][:]
+            
+            path.unlink()
+            train = _make_df(data['train'])
+            test = _make_df(data['test'])
+            df = pd.concat([train, test]).reset_index(drop=True)
+            df.to_feather(self.path)
 
 
 def _make_df(data):
@@ -115,3 +128,8 @@ class _Gbsg(_DatasetDeepSurv):
     """
     name = 'gbsg'
     _checksum = 'de2359bee62bf36b9e3f901fea4a9fbef2d145e26e9384617d0d3f75892fe5ce'
+
+class _SimpleModel(_DatasetDeepSurv):
+    """Simple clinical model"""
+    name = 'simplemodel'
+    _checksum = 'your_checksum_here'  # You can calculate this if needed
