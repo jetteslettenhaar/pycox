@@ -3,7 +3,7 @@ This is a script to run my simple model with the provided scripts. The script is
 Input: .h5 file
 Output: Predictions on survival
 """
-print('This is the output of my simple model:')
+print('This is the output of my clinical model:')
 
 import numpy as np
 import matplotlib.pyplot as plt
@@ -21,7 +21,6 @@ from pycox.evaluation import EvalSurv
 import pandas as pd
 import h5py
 from collections import defaultdict
-
 np.random.seed(1234)
 _ = torch.manual_seed(123)
 
@@ -50,54 +49,52 @@ def _make_df(data):
           .assign(event=d))
     return df
 
-# We are going to make test and train sets for my data
-h5_file_path = 'my_models/simple_model.h5'      # Load the data 
+# Example usage:
+h5_file_path = 'my_models/clinical_model.h5'  # Update with your file path
 df_train = load_and_process_h5(h5_file_path)
-df_test = df_train.sample(frac=0.2)             # Use 20% for my test set 
-df_train = df_train.drop(df_test.index)         
-df_val = df_train.sample(frac=0.2)              # Use 20% for my validation set (of the samples that are left for the training set)
+df_test = df_train.sample(frac=0.2)
+df_train = df_train.drop(df_test.index)
+df_val = df_train.sample(frac=0.2)
 df_train = df_train.drop(df_val.index)
 print(df_train.head())
 
+# Standardize
+cols_standardize = ['x27', 'x29', 'x31']
+cols_leave = ['x0', 'x1', 'x2', 'x3', 'x4', 'x5', 'x6', 'x7', 'x8', 'x9', 'x10', 'x11', 'x12', 'x13', 'x14', 'x15', 'x16', 'x17', 'x18', 'x19', 'x20', 'x21', 'x22', 'x23', 'x24', 'x25', 'x26', 'x29', 'x30']
 
-# Standardize: we remove the mean and scale it to unit variance 
-cols_standardize = ['x12', 'x13']
-cols_leave = ['x0', 'x1', 'x2', 'x3', 'x4', 'x5', 'x6', 'x7', 'x8', 'x9', 'x10', 'x11', 'x14', 'x15']
-
-standardize = [([col], StandardScaler()) for col in cols_standardize] 
+standardize = [([col], StandardScaler()) for col in cols_standardize]
 leave = [(col, None) for col in cols_leave]
 
 x_mapper = DataFrameMapper(standardize + leave)
 
-# Everything needs to be of type 'float32', otherwise you will get type errors (required by PyTorch)
 x_train = x_mapper.fit_transform(df_train).astype('float32')
 x_val = x_mapper.transform(df_val).astype('float32')
 x_test = x_mapper.transform(df_test).astype('float32')
 
-# No label transform and need to get the duration and event (labels for the train, validation and test set)
+# No label transform
 get_target = lambda df: (df['duration'].values, df['event'].values)
 y_train = get_target(df_train)
 y_val = get_target(df_val)
 durations_test, events_test = get_target(df_test)
 val = x_val, y_val
 
-# Neural network, which is a simple MLP with two hidden layers, ReLU activation, batch norm and dropout 
+# Neural network
 in_features = x_train.shape[1]
 num_nodes = [8, 8]
-out_features = 1                                    # Produces a single value that is used for the CPH model to calculate the log hazard ratio
-batch_norm = True               
-dropout = 0.1                                       # Prevents overfitting by randomly dropping out neurons
-output_bias = False                                 # Could maybe turn this off?
+out_features = 1
+batch_norm = True
+dropout = 0.1
+output_bias = False
 
 net = tt.practical.MLPVanilla(in_features, num_nodes, out_features, batch_norm,
                               dropout, output_bias=output_bias)
 
 # Training the model
-model = CoxPH(net, tt.optim.Adam)                   # Could maybe choose other optimizer
-batch_size = 32                
+model = CoxPH(net, tt.optim.Adam)
+batch_size = 64
 model.optimizer.set_lr(0.01)
 epochs = 512
-callbacks = [tt.callbacks.EarlyStopping()]          # Include the EarlyStopping callback to stop training when the validation loss stops improving 
+callbacks = [tt.callbacks.EarlyStopping()]
 verbose = True
 
 log = model.fit(x_train, y_train, batch_size, epochs, callbacks, verbose,
@@ -112,7 +109,7 @@ plt.ylabel('S(t | x)')
 plt.xlabel('Time')
 
 # Save the plot to a specific location (replace 'path/to/save/plot.png' with your desired file path)
-plt.savefig('/trinity/home/r098372/pycox/output/survival_output_simple_model.png')
+plt.savefig('/trinity/home/r098372/pycox/output/survival_output_clinical_model.png')
 
 ev = EvalSurv(surv, durations_test, events_test, censor_surv='km')
 print('Concordence:\n', ev.concordance_td())
