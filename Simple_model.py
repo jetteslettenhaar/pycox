@@ -57,12 +57,12 @@ df_test = df_train.sample(frac=0.2)             # Use 20% for my test set
 df_train = df_train.drop(df_test.index)         
 df_val = df_train.sample(frac=0.2)              # Use 20% for my validation set (of the samples that are left for the training set)
 df_train = df_train.drop(df_val.index)
-print(df_train.head())
+print(df_train.head(20))
 
 
 # Standardize: we remove the mean and scale it to unit variance 
-cols_standardize = ['x12', 'x13']
-cols_leave = ['x0', 'x1', 'x2', 'x3', 'x4', 'x5', 'x6', 'x7', 'x8', 'x9', 'x10', 'x11', 'x14', 'x15']
+cols_standardize = ['x12', 'x13', 'x14', 'x15']
+cols_leave = ['x0', 'x1', 'x2', 'x3', 'x4', 'x5', 'x6', 'x7', 'x8', 'x9', 'x10', 'x11']
 
 standardize = [([col], StandardScaler()) for col in cols_standardize] 
 leave = [(col, None) for col in cols_leave]
@@ -83,11 +83,11 @@ val = x_val, y_val
 
 # Neural network, which is a simple MLP with two hidden layers, ReLU activation, batch norm and dropout 
 in_features = x_train.shape[1]
-num_nodes = [8, 8]
+num_nodes = [16, 16]
 out_features = 1                                    # Produces a single value that is used for the CPH model to calculate the log hazard ratio
 batch_norm = True               
 dropout = 0.1                                       # Prevents overfitting by randomly dropping out neurons
-output_bias = False                                 # Could maybe turn this off?
+output_bias = False                                 # Could maybe turn this on?
 
 net = tt.practical.MLPVanilla(in_features, num_nodes, out_features, batch_norm,
                               dropout, output_bias=output_bias)
@@ -95,13 +95,18 @@ net = tt.practical.MLPVanilla(in_features, num_nodes, out_features, batch_norm,
 # Training the model
 model = CoxPH(net, tt.optim.Adam)                   # Could maybe choose other optimizer
 batch_size = 32                
-model.optimizer.set_lr(0.01)
+model.optimizer.set_lr(0.001)
 epochs = 512
-callbacks = [tt.callbacks.EarlyStopping()]          # Include the EarlyStopping callback to stop training when the validation loss stops improving 
+# callbacks = [tt.callbacks.EarlyStopping()]          # Include the EarlyStopping callback to stop training when the validation loss stops improving 
+callbacks = []
 verbose = True
+
+import ipdb
+ipdb.set_trace()
 
 log = model.fit(x_train, y_train, batch_size, epochs, callbacks, verbose,
                 val_data=val, val_batch_size=batch_size)
+
 print(log)
 
 # Prediction

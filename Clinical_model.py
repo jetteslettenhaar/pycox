@@ -56,11 +56,11 @@ df_test = df_train.sample(frac=0.2)
 df_train = df_train.drop(df_test.index)
 df_val = df_train.sample(frac=0.2)
 df_train = df_train.drop(df_val.index)
-print(df_train.head())
+print(df_train.head(20))
 
 # Standardize
-cols_standardize = ['x27', 'x29', 'x31']
-cols_leave = ['x0', 'x1', 'x2', 'x3', 'x4', 'x5', 'x6', 'x7', 'x8', 'x9', 'x10', 'x11', 'x12', 'x13', 'x14', 'x15', 'x16', 'x17', 'x18', 'x19', 'x20', 'x21', 'x22', 'x23', 'x24', 'x25', 'x26', 'x29', 'x30']
+cols_standardize = ['x27', 'x28', 'x29', 'x30', 'x31']
+cols_leave = ['x0', 'x1', 'x2', 'x3', 'x4', 'x5', 'x6', 'x7', 'x8', 'x9', 'x10', 'x11', 'x12', 'x13', 'x14', 'x15', 'x16', 'x17', 'x18', 'x19', 'x20', 'x21', 'x22', 'x23', 'x24', 'x25', 'x26']
 
 standardize = [([col], StandardScaler()) for col in cols_standardize]
 leave = [(col, None) for col in cols_leave]
@@ -91,7 +91,7 @@ net = tt.practical.MLPVanilla(in_features, num_nodes, out_features, batch_norm,
 
 # Training the model
 model = CoxPH(net, tt.optim.Adam)
-batch_size = 64
+batch_size = 32
 model.optimizer.set_lr(0.01)
 epochs = 512
 callbacks = [tt.callbacks.EarlyStopping()]
