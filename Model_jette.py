@@ -1,4 +1,8 @@
 # Step 1: Import all important modules
+
+import ctypes
+libgcc_s = ctypes.CDLL('libgcc_s.so.1')
+
 import torch
 from torch import nn
 import pytorch_lightning as pl
@@ -16,14 +20,24 @@ from lifelines.utils import concordance_index
 from monai.networks.nets import FullyConnectedNet
 
 import mlflow
+
+
 # --------------------------------------------------------------------------------------------------------
+
+# Let set up device agnostic code
+device = "cuda" if torch.cuda.is_available() else "cpu"
+
+# Set manual seed
+seed = 42
+torch.manual_seed(seed)
+torch.cuda.manual_seed(seed)
 
 # Now writing it without functions (to test), later write this into functions as part of a class
 
 # Step 2: Get data ready (turn into tensors)
 # Step 2a: Turn data into numbers --> my data is already in numbers since I used One Hot Encoding
 
-# Step 2b: Load the data (def load_data)
+# Step 2b: Load the data
 '''
 X: covariates of the model
 e: whether the event (death or RFS) occurs? (1: occurs; 0: censored)
@@ -77,8 +91,8 @@ class SurvivalDataset(Dataset):
         return len(self.dataframe)
 
     def __getitem__(self, idx):
-        x = torch.tensor(self.dataframe.iloc[idx, :-2].values, dtype=torch.float32)  # Exclude 'y' and 'e'
-        y = torch.tensor(self.dataframe.iloc[idx, -2:].values, dtype=torch.float32)  # 'y' and 'e'
+        x = torch.tensor(self.dataframe.iloc[idx, :-2].values, dtype=torch.float32).to(device)  # Exclude 'y' and 'e'
+        y = torch.tensor(self.dataframe.iloc[idx, -2:].values, dtype=torch.float32).to(device)  # 'y' and 'e'
         return {'x': x, 'y': y}
 
 # Create custom datasets
@@ -98,13 +112,15 @@ in_channels = x_train.shape[1]      # Number of input channels
 out_channels = 1                    # Numer of output channels (1 for survival analysis)
 hidden_channels = [10, 10, 10]      # Number of output channels of each hidden layer
 dropout = 0.1                       
-l2_loss = 0                         # If this is not the case, we need to make a regularisation class for the loss function to work! (see PyTorch model)
+l2_reg = 0                          # If this is not the case, we need to make a regularisation class for the loss function to work! (see PyTorch model)
 
 class Survivalmodel(pl.LightningModule):
     def __init__(self, in_channels, out_channels, hidden_channels, dropout):
         super().__init__()
         # We use the FullyConnectedNet as a model to replicate DeepSurv
         self.model = FullyConnectedNet(in_channels=in_channels, out_channels=1, hidden_channels=hidden_channels, dropout=dropout)
+        self.model.to(device) # Move model to GPU
+        self.l2_reg = l2_reg
 
         # We want to log everything
         mlflow.start_run()
@@ -122,18 +138,19 @@ class Survivalmodel(pl.LightningModule):
         optimizer = torch.optim.SGD(self.parameters(), lr=0.01)
         return optimizer
 
-    def loss_fn(self, risk_pred, y, e, l2reg):
-        mask = torch.ones(y.shape[0], y.shape[0])
+    def loss_fn(self, risk_pred, y, e, l2_reg):
+        mask = torch.ones(y.shape[0], y.shape[0]).to(device)
         mask[(y.T - y) > 0] = 0
         log_loss = torch.exp(risk_pred) * mask
         log_loss = torch.sum(log_loss, dim=0) / torch.sum(mask, dim=0)
         log_loss = torch.log(log_loss).reshape(-1, 1)
         neg_log_loss = -torch.sum((risk_pred - log_loss) * e) / torch.sum(e)
+        return neg_log_loss
         
         # L2 regularization
         if l2_reg > 0:
             reg = Regularization(order=2, weight_decay=l2_reg)
-            l2_loss = reg(model)
+            l2_loss = reg(self.model)
             return neg_log_loss + l2_loss
         else:
             return neg_log_loss
@@ -150,11 +167,12 @@ class Survivalmodel(pl.LightningModule):
         if not isinstance(e, np.ndarray):
             e = e.detach().cpu().numpy()
         return concordance_index(y, risk_pred, e) # Maybe risk_pred should be negative sign
+    
 
     def training_step(self, batch, batch_idx):
         x, y, e = batch['x'], batch['y'][:, 0], batch['y'][:, 1]
         risk_pred = self.forward(x)
-        loss = self.loss_fn(risk_pred, y, e, l2reg)
+        loss = self.loss_fn(risk_pred, y, e, l2_reg)
         c_index_value = self.c_index(risk_pred, y, e)
 
         # Logging with MLflow
@@ -166,7 +184,7 @@ class Survivalmodel(pl.LightningModule):
     def validation_step(self, batch, batch_idx):
         x, y, e = batch['x'], batch['y'][:, 0], batch['y'][:, 1]
         risk_pred = self.forward(x)
-        loss = self.loss_fn(risk_pred, y, e, l2reg)
+        loss = self.loss_fn(risk_pred, y, e, l2_reg)
         c_index_value = self.c_index(risk_pred, y, e)
 
         # Logging with MLflow
@@ -180,9 +198,10 @@ class Survivalmodel(pl.LightningModule):
 # Now lets try to actually train my model
 max_epochs = 100
 model = Survivalmodel(in_channels=in_channels, out_channels=1, hidden_channels=hidden_channels, dropout=dropout)
-trainer = pl.Trainer(max_epochs=max_epochs)
+model.to(device)
+trainer = pl.Trainer(max_epochs=max_epochs, accelerator='gpu', devices=1)
 
-trainer.fit(model,train_dataloaders=train_dataloder, val_dataloaders=val_dataloader)
+trainer.fit(model,train_dataloaders=train_dataloader, val_dataloaders=test_dataloader)
 
 
 
