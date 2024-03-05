@@ -16,6 +16,7 @@ from sklearn.preprocessing import StandardScaler
 from torch.utils.data import Dataset
 from torch.utils.data import DataLoader
 from lifelines.utils import concordance_index
+# from sksurv.metrics import concordance_index_censored
 
 from monai.networks.nets import FullyConnectedNet
 
@@ -32,7 +33,6 @@ seed = 42
 torch.manual_seed(seed)
 torch.cuda.manual_seed(seed)
 
-# Now writing it without functions (to test), later write this into functions as part of a class
 
 # Step 2: Get data ready (turn into tensors)
 # Step 2a: Turn data into numbers --> my data is already in numbers since I used One Hot Encoding
@@ -43,7 +43,8 @@ X: covariates of the model
 e: whether the event (death or RFS) occurs? (1: occurs; 0: censored)
 t/y: the time of event e.
 '''
-filepath = 'my_models/simple_model.h5'
+filepath = 'my_models/simple_model_all.h5'
+
 with h5py.File(filepath, 'r') as f:
     data = {'train': {}, 'test': {}}
     for datasets in f:
@@ -68,26 +69,34 @@ test_df = (pd.DataFrame(x_test, columns=columns)
                .assign(y=t_test)
                .assign(e=e_test))
 
-# Maybe put this together, if I want a validation dataset
+# Maybe put this together, if I want a validation dataset --> Possible later
 print(train_df)
 print(test_df)
 
 # Step 2c: Standardize covariates
-stand_col = ['x12', 'x13', 'x14', 'x15']
+# stand_col = ['x12', 'x13', 'x14', 'x15'] # This is for model with 159 subjects
+stand_col = ['x15', 'x16', 'x17', 'x18']
 scalar = StandardScaler()
 train_df[stand_col] = scalar.fit_transform(train_df[stand_col])
 test_df[stand_col] = scalar.fit_transform(test_df[stand_col])
+
 print(train_df)
 print(test_df)
 
+# We need to find out where this is coming from!!! Somehow, sometimes the y is NaN
+train_df = train_df.fillna(0)
+test_df = test_df.fillna(0)
+
 # # Step 2d: Split into train and test set, but we do need to seperate the data (covariates) and corresponding labels (event, duration)
-# I should also create a train and test dataloader and convert the data to a tensor to actually use it in the model
+# I should also create a train and test dataloader and convert the data to a tensor to actually use it in the model 
 
 class SurvivalDataset(Dataset):
     def __init__(self, dataframe):
+        # Needed to make a dataloader in PyTorch
         self.dataframe = dataframe
 
     def __len__(self):
+        # Needed to make a dataloader in PyTorch
         return len(self.dataframe)
 
     def __getitem__(self, idx):
@@ -100,7 +109,7 @@ train_dataset = SurvivalDataset(train_df)
 test_dataset = SurvivalDataset(test_df)
 
 # Create custom dataloaders
-batch_size = 32  
+batch_size = 32                     # Hyperparameter, can adjust this
 train_dataloader = DataLoader(train_dataset, batch_size=batch_size, shuffle=True)
 test_dataloader = DataLoader(test_dataset, batch_size=batch_size)
 
@@ -109,20 +118,20 @@ test_dataloader = DataLoader(test_dataset, batch_size=batch_size)
 # Step 3 Build a model
 # Define parameters
 in_channels = x_train.shape[1]      # Number of input channels
-out_channels = 1                    # Numer of output channels (1 for survival analysis)
-hidden_channels = [10, 10, 10]      # Number of output channels of each hidden layer
-dropout = 0.1                       
-l2_reg = 0                          # If this is not the case, we need to make a regularisation class for the loss function to work! (see PyTorch model)
+out_channels = 1                    # Number of output channels (1 for survival analysis)
+hidden_channels = [10, 10, 10]      # Number of output channels of each hidden layer (can be adjusted)
+dropout = 0.1                       # Hyperparameter, can be adjusted                
+l2_reg = 0                          # If this is not the case (l2_reg > 0), we need to make a regularisation class for the loss function to work! (see PyTorch model)
 
 class Survivalmodel(pl.LightningModule):
     def __init__(self, in_channels, out_channels, hidden_channels, dropout):
         super().__init__()
         # We use the FullyConnectedNet as a model to replicate DeepSurv
         self.model = FullyConnectedNet(in_channels=in_channels, out_channels=1, hidden_channels=hidden_channels, dropout=dropout)
-        self.model.to(device) # Move model to GPU
-        self.l2_reg = l2_reg
+        self.model.to(device)       # Move model to GPU
+        self.l2_reg = l2_reg        # Is this necessary? Or is it sufficient to only define it as the parameter above
 
-        # We want to log everything
+        # We want to log everything (using MLflow)
         mlflow.start_run()
         mlflow.log_params({
             'in_channels': in_channels,
@@ -145,9 +154,8 @@ class Survivalmodel(pl.LightningModule):
         log_loss = torch.sum(log_loss, dim=0) / torch.sum(mask, dim=0)
         log_loss = torch.log(log_loss).reshape(-1, 1)
         neg_log_loss = -torch.sum((risk_pred - log_loss) * e) / torch.sum(e)
-        return neg_log_loss
         
-        # L2 regularization
+        # L2 regularization (not working now, we need Regularisation function!)
         if l2_reg > 0:
             reg = Regularization(order=2, weight_decay=l2_reg)
             l2_loss = reg(self.model)
@@ -159,15 +167,32 @@ class Survivalmodel(pl.LightningModule):
         '''
         We want to check whether the inputs are numpy arrays (this is expected in the function concordance_index).
         If not, we have to convert them to numpy arrays. Then we can use the imported function to calculate the c-index
+        NOTETHAT this is now only using uncensored data (which is not a lot, especially for test set)
         '''
         if not isinstance(y, np.ndarray):
             y = y.detach().cpu().numpy()
         if not isinstance(risk_pred, np.ndarray):
-            risk_pred = risk_pred.detach().cpu().numpy()
+            risk_pred = risk_pred.detach().cpu().numpy().squeeze()
         if not isinstance(e, np.ndarray):
             e = e.detach().cpu().numpy()
-        return concordance_index(y, risk_pred, e) # Maybe risk_pred should be negative sign
-    
+            threshold = 0.5 
+            e = e > threshold
+        return concordance_index(y, risk_pred, e) # Maybe risk_pred should be negative sign, but think this is already incorporated in function, when making it myself, do that
+
+    # def c_index(self, risk_pred, y, e):
+    #     if not isinstance(y, np.ndarray):
+    #         y = y.detach().cpu().numpy()
+    #         print(y)
+    #     if not isinstance(risk_pred, np.ndarray):
+    #         risk_pred = risk_pred.detach().cpu().numpy().squeeze()
+    #         print(risk_pred)
+    #     if not isinstance(e, np.ndarray):
+    #         e = e.detach().cpu().numpy()
+    #         threshold = 0.5 
+    #         e = e > threshold
+    #         print(e)
+    #     c_harrell = concordance_index_censored(e, y, risk_pred)
+    #     return c_harrell
 
     def training_step(self, batch, batch_idx):
         x, y, e = batch['x'], batch['y'][:, 0], batch['y'][:, 1]
@@ -199,7 +224,7 @@ class Survivalmodel(pl.LightningModule):
 max_epochs = 100
 model = Survivalmodel(in_channels=in_channels, out_channels=1, hidden_channels=hidden_channels, dropout=dropout)
 model.to(device)
-trainer = pl.Trainer(max_epochs=max_epochs, accelerator='gpu', devices=1)
+trainer = pl.Trainer(max_epochs=max_epochs, accelerator='gpu', devices=1) # Do I need to put it on the GPU again? Or can I remove this?
 
 trainer.fit(model,train_dataloaders=train_dataloader, val_dataloaders=test_dataloader)
 
