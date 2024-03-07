@@ -109,7 +109,7 @@ train_dataset = SurvivalDataset(train_df)
 test_dataset = SurvivalDataset(test_df)
 
 # Create custom dataloaders
-batch_size = 32                     # Hyperparameter, can adjust this
+batch_size = 64                     # Hyperparameter, can adjust this
 train_dataloader = DataLoader(train_dataset, batch_size=batch_size, shuffle=True)
 test_dataloader = DataLoader(test_dataset, batch_size=batch_size)
 
@@ -177,7 +177,7 @@ class Survivalmodel(pl.LightningModule):
             e = e.detach().cpu().numpy()
             threshold = 0.5 
             e = e > threshold
-        return concordance_index(y, risk_pred, e) # Maybe risk_pred should be negative sign, but think this is already incorporated in function, when making it myself, do that
+        return concordance_index(y, -risk_pred, e) # Maybe risk_pred should be negative sign, but think this is already incorporated in function, when making it myself, do that
 
     # def c_index(self, risk_pred, y, e):
     #     if not isinstance(y, np.ndarray):
@@ -194,27 +194,63 @@ class Survivalmodel(pl.LightningModule):
     #     c_harrell = concordance_index_censored(e, y, risk_pred)
     #     return c_harrell
 
+    def brier_score(self, risk_pred, y, e):
+        """
+        Calculate the brier score with the risk predictions, durations, events ad durations at which the brier score is calculated. 
+        This function will return the Brier Score at different points in time.
+        """
+        # Move everything to CPU
+        max_duration = torch.max(y.cpu()).item()  # Use torch.max() instead of np.max()
+        time_grid = np.linspace(0, max_duration, 100)
+
+        brier_scores = []
+
+        for t in time_grid:
+            mask = (y.cpu().numpy() >= t)
+            weights = (y.cpu().numpy() >= t) & (e.cpu().numpy() == 0)
+            risk_pred_np = risk_pred.detach().cpu().numpy()  # Use detach() instead of cpu()
+            e_np = e.detach().cpu().numpy()  # Use detach() instead of cpu()
+            brier_score_t = ((risk_pred_np - e_np) ** 2 * weights).sum() / mask.sum()
+            brier_scores.append(brier_score_t)
+
+        return pd.Series(brier_scores, index=time_grid).rename('brier_score')
+    
+    def integrated_brier_score(self, risk_pred, y, e):
+        max_duration = torch.max(y.cpu()).item()  # Use torch.max() instead of np.max()
+        time_grid = np.linspace(0, max_duration, 100)
+
+        brier_scores = self.brier_score(risk_pred, y, e)
+
+        return np.trapz(brier_scores, time_grid)
+
     def training_step(self, batch, batch_idx):
         x, y, e = batch['x'], batch['y'][:, 0], batch['y'][:, 1]
         risk_pred = self.forward(x)
         loss = self.loss_fn(risk_pred, y, e, l2_reg)
         c_index_value = self.c_index(risk_pred, y, e)
+        brier_scores = self.brier_score(risk_pred, y, e)
+        integrated_brier = self.integrated_brier_score(risk_pred, y, e)
 
         # Logging with MLflow
         mlflow.log_metric('train_loss', loss.item())
         mlflow.log_metric('train_c_index', c_index_value)
-        return {'loss': loss}
+        mlflow.log_metric('train_integrated_brier', integrated_brier)
 
+        return {'loss': loss}
 
     def validation_step(self, batch, batch_idx):
         x, y, e = batch['x'], batch['y'][:, 0], batch['y'][:, 1]
         risk_pred = self.forward(x)
         loss = self.loss_fn(risk_pred, y, e, l2_reg)
         c_index_value = self.c_index(risk_pred, y, e)
+        brier_scores = self.brier_score(risk_pred, y, e)
+        integrated_brier = self.integrated_brier_score(risk_pred, y, e)
 
         # Logging with MLflow
         mlflow.log_metric('val_loss', loss.item())
         mlflow.log_metric('val_c_index', c_index_value)
+        mlflow.log_metric('val_integrated_brier', integrated_brier)
+
         return {'loss': loss}
 
     def on_train_end(self):
