@@ -16,6 +16,7 @@ from sklearn.preprocessing import StandardScaler
 from torch.utils.data import Dataset
 from torch.utils.data import DataLoader
 from lifelines.utils import concordance_index
+from lifelines import KaplanMeierFitter
 # from sksurv.metrics import concordance_index_censored
 
 from sksurv.metrics import brier_score
@@ -112,7 +113,7 @@ train_dataset = SurvivalDataset(train_df)
 test_dataset = SurvivalDataset(test_df)
 
 # Create custom dataloaders
-batch_size = 64                     # Hyperparameter, can adjust this
+batch_size = 32                     # Hyperparameter, can adjust this
 train_dataloader = DataLoader(train_dataset, batch_size=batch_size, shuffle=True)
 test_dataloader = DataLoader(test_dataset, batch_size=batch_size)
 
@@ -225,18 +226,27 @@ class Survivalmodel(pl.LightningModule):
         risk_pred_np = risk_pred.detach().cpu().numpy()
 
         max_duration = np.max(y_np)
-        time_grid = np.linspace(0, max_duration, 100)
+        #time_grid = np.linspace(0, max_duration, 100)
+        time_grid = np.linspace(0, 1095, 100)
 
         brier_scores = np.empty(time_grid.shape[0], dtype=float)
+
+        # Now we need to estimate the survival function of the censoring distribution
+        kmf = KaplanMeierFitter()
+        kmf.fit(durations=y_np, event_observed=1-e_np)
+        censor_surv_values = kmf.predict(time_grid)
+
 
         for i, t in enumerate(time_grid):
             mask = (y_np >= t)
             weights = (y_np >= t) & (e_np == 0)
 
             brier_scores[i] = np.mean(
-                np.square(risk_pred_np) * mask.astype(int) / weights.sum()
-                + np.square(1.0 - risk_pred_np) * (~mask).astype(int) / (len(y) - weights.sum())
+            np.square(0.0 - risk_pred_np) * mask.astype(int) / (censor_surv_values.loc[t] * weights.sum())
+            + np.square(1.0 - risk_pred_np) * (~mask).astype(int) / ((1 - censor_surv_values.loc[t]) * weights.sum())
             )
+
+            print(brier_scores[i])
 
         return pd.Series(brier_scores, index=time_grid, name='brier_score')
         
@@ -252,7 +262,8 @@ class Survivalmodel(pl.LightningModule):
         y_np = y.detach().cpu().numpy()
 
         max_duration = np.max(y_np)
-        time_grid = np.linspace(0, max_duration, 100)
+        #time_grid = np.linspace(0, max_duration, 100)
+        time_grid = np.linspace(0, 1095, 100)
 
         brier_scores = self.brier_score(risk_pred, y, e)
 
