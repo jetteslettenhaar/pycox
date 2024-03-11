@@ -120,18 +120,12 @@ test_dataloader = DataLoader(test_dataset, batch_size=batch_size)
 # --------------------------------------------------------------------------------------------------------
 
 # Step 3 Build a model
-# Define parameters
-in_channels = x_train.shape[1]      # Number of input channels
-out_channels = 1                    # Number of output channels (1 for survival analysis)
-hidden_channels = [10, 10, 10]      # Number of output channels of each hidden layer (can be adjusted)
-dropout = 0.1                       # Hyperparameter, can be adjusted                
-l2_reg = 0                          # If this is not the case (l2_reg > 0), we need to make a regularisation class for the loss function to work! (see PyTorch model)
 
 class Survivalmodel(pl.LightningModule):
-    def __init__(self, in_channels, out_channels, hidden_channels, dropout):
+    def __init__(self, in_channels, out_channels, hidden_channels, dropout, l2_reg):
         super().__init__()
         # We use the FullyConnectedNet as a model to replicate DeepSurv
-        self.model = FullyConnectedNet(in_channels=in_channels, out_channels=1, hidden_channels=hidden_channels, dropout=dropout)
+        self.model = FullyConnectedNet(in_channels=in_channels, out_channels=out_channels, hidden_channels=hidden_channels, dropout=dropout)
         self.model.to(device)       # Move model to GPU
         self.l2_reg = l2_reg        # Is this necessary? Or is it sufficient to only define it as the parameter above
 
@@ -151,7 +145,7 @@ class Survivalmodel(pl.LightningModule):
         optimizer = torch.optim.SGD(self.parameters(), lr=0.01)         # Learning rate is hyperparameter!
         return optimizer
 
-    def loss_fn(self, risk_pred, y, e, l2_reg):
+    def loss_fn(self, risk_pred, y, e):
         mask = torch.ones(y.shape[0], y.shape[0]).to(device)
         mask[(y.T - y) > 0] = 0
         log_loss = torch.exp(risk_pred) * mask
@@ -160,8 +154,8 @@ class Survivalmodel(pl.LightningModule):
         neg_log_loss = -torch.sum((risk_pred - log_loss) * e) / torch.sum(e)
         
         # L2 regularization (not working now, we need Regularisation function!)
-        if l2_reg > 0:
-            reg = Regularization(order=2, weight_decay=l2_reg)
+        if self.l2_reg > 0:
+            reg = Regularization(order=2, weight_decay=self.l2_reg)
             l2_loss = reg(self.model)
             return neg_log_loss + l2_loss
         else:
@@ -239,10 +233,12 @@ class Survivalmodel(pl.LightningModule):
 
         for i, t in enumerate(time_grid):
             mask = (y_np >= t)
+            print(mask)
             weights = (y_np >= t) & (e_np == 0)
+            print(weights)
 
             brier_scores[i] = np.mean(
-            np.square(0.0 - risk_pred_np) * mask.astype(int) / (censor_surv_values.loc[t] * weights.sum())
+            np.square(0.0 - risk_pred_np) * mask.astype(int) / (censor_surv_values.iloc[(np.abs(censor_surv_values.index.to_numpy() - (1095 - t))).argmin()] * weights.sum())
             + np.square(1.0 - risk_pred_np) * (~mask).astype(int) / ((1 - censor_surv_values.loc[t]) * weights.sum())
             )
 
@@ -272,7 +268,7 @@ class Survivalmodel(pl.LightningModule):
     def training_step(self, batch, batch_idx):
         x, y, e = batch['x'], batch['y'][:, 0], batch['y'][:, 1]
         risk_pred = self.forward(x)
-        loss = self.loss_fn(risk_pred, y, e, l2_reg)
+        loss = self.loss_fn(risk_pred, y, e)
         c_index_value = self.c_index(risk_pred, y, e)
         brier_scores = self.brier_score(risk_pred, y, e)
         integrated_brier = self.integrated_brier_score(risk_pred, y, e)
@@ -287,7 +283,7 @@ class Survivalmodel(pl.LightningModule):
     def validation_step(self, batch, batch_idx):
         x, y, e = batch['x'], batch['y'][:, 0], batch['y'][:, 1]
         risk_pred = self.forward(x)
-        loss = self.loss_fn(risk_pred, y, e, l2_reg)
+        loss = self.loss_fn(risk_pred, y, e)
         c_index_value = self.c_index(risk_pred, y, e)
         brier_scores = self.brier_score(risk_pred, y, e)
         integrated_brier = self.integrated_brier_score(risk_pred, y, e)
@@ -303,8 +299,15 @@ class Survivalmodel(pl.LightningModule):
         mlflow.end_run()
 
 # Now lets try to actually train my model
+# Define parameters
+in_channels = x_train.shape[1]      # Number of input channels
+out_channels = 1                    # Number of output channels (1 for survival analysis)
+hidden_channels = [10, 10, 10]      # Number of output channels of each hidden layer (can be adjusted)
+dropout = 0.1                       # Hyperparameter, can be adjusted                
+l2_reg = 0                          # If this is not the case (l2_reg > 0), we need to make a regularisation class for the loss function to work! (see PyTorch model)
+
 max_epochs = 100
-model = Survivalmodel(in_channels=in_channels, out_channels=1, hidden_channels=hidden_channels, dropout=dropout)
+model = Survivalmodel(in_channels=in_channels, out_channels=out_channels, hidden_channels=hidden_channels, dropout=dropout, l2_reg=l2_reg)
 model.to(device)
 trainer = pl.Trainer(max_epochs=max_epochs, accelerator='gpu', devices=1) # Do I need to put it on the GPU again? Or can I remove this?
 
