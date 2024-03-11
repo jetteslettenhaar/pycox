@@ -18,6 +18,9 @@ from torch.utils.data import DataLoader
 from lifelines.utils import concordance_index
 # from sksurv.metrics import concordance_index_censored
 
+from sksurv.metrics import brier_score
+from sksurv.metrics import integrated_brier_score
+
 from monai.networks.nets import FullyConnectedNet
 
 import mlflow
@@ -144,7 +147,7 @@ class Survivalmodel(pl.LightningModule):
         return self.model(x)
 
     def configure_optimizers(self):
-        optimizer = torch.optim.SGD(self.parameters(), lr=0.01)
+        optimizer = torch.optim.SGD(self.parameters(), lr=0.01)         # Learning rate is hyperparameter!
         return optimizer
 
     def loss_fn(self, risk_pred, y, e, l2_reg):
@@ -177,7 +180,7 @@ class Survivalmodel(pl.LightningModule):
             e = e.detach().cpu().numpy()
             threshold = 0.5 
             e = e > threshold
-        return concordance_index(y, -risk_pred, e) # Maybe risk_pred should be negative sign, but think this is already incorporated in function, when making it myself, do that
+        return concordance_index(y, -risk_pred, e) # Risk_pred should have a negative sign
 
     # def c_index(self, risk_pred, y, e):
     #     if not isinstance(y, np.ndarray):
@@ -194,29 +197,61 @@ class Survivalmodel(pl.LightningModule):
     #     c_harrell = concordance_index_censored(e, y, risk_pred)
     #     return c_harrell
 
+    # def brier_score(self, risk_pred, y, e):
+    #     """
+    #     Calculate the brier score with the risk predictions, durations, events ad durations at which the brier score is calculated. 
+    #     This function will return the Brier Score at different points in time.
+    #     """
+    #     # Move everything to CPU
+    #     max_duration = torch.max(y.cpu()).item()  # Use torch.max() instead of np.max()
+    #     time_grid = np.linspace(0, max_duration, 100)
+
+    #     brier_scores = []
+
+    #     for t in time_grid:
+    #         mask = (y.cpu().numpy() >= t)
+    #         weights = (y.cpu().numpy() >= t) & (e.cpu().numpy() == 0)
+    #         risk_pred_np = risk_pred.detach().cpu().numpy()  # Use detach() instead of cpu()
+    #         e_np = e.detach().cpu().numpy()  # Use detach() instead of cpu()
+    #         brier_score_t = ((risk_pred_np - e_np) ** 2 * weights).sum() / len(y)
+    #         brier_scores.append(brier_score_t)
+
+    #     return pd.Series(brier_scores, index=time_grid).rename('brier_score')
+
     def brier_score(self, risk_pred, y, e):
-        """
-        Calculate the brier score with the risk predictions, durations, events ad durations at which the brier score is calculated. 
-        This function will return the Brier Score at different points in time.
-        """
-        # Move everything to CPU
-        max_duration = torch.max(y.cpu()).item()  # Use torch.max() instead of np.max()
+        # Convert PyTorch Tensors to NumPy arrays
+        y_np = y.detach().cpu().numpy()
+        e_np = e.detach().cpu().numpy()
+        risk_pred_np = risk_pred.detach().cpu().numpy()
+
+        max_duration = np.max(y_np)
         time_grid = np.linspace(0, max_duration, 100)
 
-        brier_scores = []
+        brier_scores = np.empty(time_grid.shape[0], dtype=float)
 
-        for t in time_grid:
-            mask = (y.cpu().numpy() >= t)
-            weights = (y.cpu().numpy() >= t) & (e.cpu().numpy() == 0)
-            risk_pred_np = risk_pred.detach().cpu().numpy()  # Use detach() instead of cpu()
-            e_np = e.detach().cpu().numpy()  # Use detach() instead of cpu()
-            brier_score_t = ((risk_pred_np - e_np) ** 2 * weights).sum() / mask.sum()
-            brier_scores.append(brier_score_t)
+        for i, t in enumerate(time_grid):
+            mask = (y_np >= t)
+            weights = (y_np >= t) & (e_np == 0)
 
-        return pd.Series(brier_scores, index=time_grid).rename('brier_score')
-    
+            brier_scores[i] = np.mean(
+                np.square(risk_pred_np) * mask.astype(int) / weights.sum()
+                + np.square(1.0 - risk_pred_np) * (~mask).astype(int) / (len(y) - weights.sum())
+            )
+
+        return pd.Series(brier_scores, index=time_grid, name='brier_score')
+        
+    # def integrated_brier_score(self, risk_pred, y, e):
+    #     max_duration = torch.max(y.cpu()).item()  # Use torch.max() instead of np.max()
+    #     time_grid = np.linspace(0, max_duration, 100)
+
+    #     brier_scores = self.brier_score(risk_pred, y, e)
+
+    #     return np.trapz(brier_scores, time_grid)
+
     def integrated_brier_score(self, risk_pred, y, e):
-        max_duration = torch.max(y.cpu()).item()  # Use torch.max() instead of np.max()
+        y_np = y.detach().cpu().numpy()
+
+        max_duration = np.max(y_np)
         time_grid = np.linspace(0, max_duration, 100)
 
         brier_scores = self.brier_score(risk_pred, y, e)
@@ -263,8 +298,3 @@ model.to(device)
 trainer = pl.Trainer(max_epochs=max_epochs, accelerator='gpu', devices=1) # Do I need to put it on the GPU again? Or can I remove this?
 
 trainer.fit(model,train_dataloaders=train_dataloader, val_dataloaders=test_dataloader)
-
-
-
-
-
