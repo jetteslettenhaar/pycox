@@ -121,6 +121,30 @@ test_dataloader = DataLoader(test_dataset, batch_size=batch_size)
 
 # Step 3 Build a model
 
+class Regularization(object):
+    def __init__(self, order, weight_decay):
+        ''' The initialization of Regularization class
+
+        :param order: (int) norm order number
+        :param weight_decay: (float) weight decay rate
+        '''
+        super(Regularization, self).__init__()
+        self.order = order
+        self.weight_decay = weight_decay
+
+    def __call__(self, model):
+        ''' Performs calculates regularization(self.order) loss for model.
+
+        :param model: (torch.nn.Module object)
+        :return reg_loss: (torch.Tensor) the regularization(self.order) loss
+        '''
+        reg_loss = 0
+        for name, w in model.named_parameters():
+            if 'weight' in name:
+                reg_loss = reg_loss + torch.norm(w, p=self.order)
+        reg_loss = self.weight_decay * reg_loss
+        return reg_loss
+
 class Survivalmodel(pl.LightningModule):
     def __init__(self, in_channels, out_channels, hidden_channels, dropout, l2_reg):
         super().__init__()
@@ -128,6 +152,7 @@ class Survivalmodel(pl.LightningModule):
         self.model = FullyConnectedNet(in_channels=in_channels, out_channels=out_channels, hidden_channels=hidden_channels, dropout=dropout)
         self.model.to(device)       # Move model to GPU
         self.l2_reg = l2_reg        # Is this necessary? Or is it sufficient to only define it as the parameter above
+        self.regularization = Regularization(order=2, weight_decay=self.l2_reg)
 
         # We want to log everything (using MLflow)
         mlflow.start_run()
@@ -155,8 +180,7 @@ class Survivalmodel(pl.LightningModule):
         
         # L2 regularization (not working now, we need Regularisation function!)
         if self.l2_reg > 0:
-            reg = Regularization(order=2, weight_decay=self.l2_reg)
-            l2_loss = reg(self.model)
+            l2_loss = self.regularization(self.model)
             return neg_log_loss + l2_loss
         else:
             return neg_log_loss
@@ -175,125 +199,47 @@ class Survivalmodel(pl.LightningModule):
             e = e.detach().cpu().numpy()
             threshold = 0.5 
             e = e > threshold
+
         return concordance_index(y, -risk_pred, e) # Risk_pred should have a negative sign
 
-    # def c_index(self, risk_pred, y, e):
-    #     if not isinstance(y, np.ndarray):
-    #         y = y.detach().cpu().numpy()
-    #         print(y)
-    #     if not isinstance(risk_pred, np.ndarray):
-    #         risk_pred = risk_pred.detach().cpu().numpy().squeeze()
-    #         print(risk_pred)
-    #     if not isinstance(e, np.ndarray):
-    #         e = e.detach().cpu().numpy()
-    #         threshold = 0.5 
-    #         e = e > threshold
-    #         print(e)
-    #     c_harrell = concordance_index_censored(e, y, risk_pred)
-    #     return c_harrell
+    def training_epoch_end(self, outputs):
+        c_index_value = self.c_index(outputs[0]['risk_pred'], outputs[0]['y'], outputs[0]['e'])
 
-    # def brier_score(self, risk_pred, y, e):
-    #     """
-    #     Calculate the brier score with the risk predictions, durations, events ad durations at which the brier score is calculated. 
-    #     This function will return the Brier Score at different points in time.
-    #     """
-    #     # Move everything to CPU
-    #     max_duration = torch.max(y.cpu()).item()  # Use torch.max() instead of np.max()
-    #     time_grid = np.linspace(0, max_duration, 100)
+        # Log C-index for the entire training set
+        mlflow.log_metric('train_c_index_epoch', c_index_value)
+        print(f'Epoch {self.current_epoch + 1}, Training C-Index: {c_index_value:.4f}')
 
-    #     brier_scores = []
+    def validation_epoch_end(self, outputs):
+        # Calculate C-index for the entire validation set
+        c_index_value = self.c_index(outputs[0]['risk_pred'], outputs[0]['y'], outputs[0]['e'])
 
-    #     for t in time_grid:
-    #         mask = (y.cpu().numpy() >= t)
-    #         weights = (y.cpu().numpy() >= t) & (e.cpu().numpy() == 0)
-    #         risk_pred_np = risk_pred.detach().cpu().numpy()  # Use detach() instead of cpu()
-    #         e_np = e.detach().cpu().numpy()  # Use detach() instead of cpu()
-    #         brier_score_t = ((risk_pred_np - e_np) ** 2 * weights).sum() / len(y)
-    #         brier_scores.append(brier_score_t)
-
-    #     return pd.Series(brier_scores, index=time_grid).rename('brier_score')
-
-    def brier_score(self, risk_pred, y, e):
-        # Convert PyTorch Tensors to NumPy arrays
-        y_np = y.detach().cpu().numpy()
-        e_np = e.detach().cpu().numpy()
-        risk_pred_np = risk_pred.detach().cpu().numpy()
-
-        max_duration = np.max(y_np)
-        #time_grid = np.linspace(0, max_duration, 100)
-        time_grid = np.linspace(0, 1095, 100)
-
-        brier_scores = np.empty(time_grid.shape[0], dtype=float)
-
-        # Now we need to estimate the survival function of the censoring distribution
-        kmf = KaplanMeierFitter()
-        kmf.fit(durations=y_np, event_observed=1-e_np)
-        censor_surv_values = kmf.predict(time_grid)
-
-
-        for i, t in enumerate(time_grid):
-            mask = (y_np >= t)
-            print(mask)
-            weights = (y_np >= t) & (e_np == 0)
-            print(weights)
-
-            brier_scores[i] = np.mean(
-            np.square(0.0 - risk_pred_np) * mask.astype(int) / (censor_surv_values.iloc[(np.abs(censor_surv_values.index.to_numpy() - (1095 - t))).argmin()] * weights.sum())
-            + np.square(1.0 - risk_pred_np) * (~mask).astype(int) / ((1 - censor_surv_values.loc[t]) * weights.sum())
-            )
-
-            print(brier_scores[i])
-
-        return pd.Series(brier_scores, index=time_grid, name='brier_score')
-        
-    # def integrated_brier_score(self, risk_pred, y, e):
-    #     max_duration = torch.max(y.cpu()).item()  # Use torch.max() instead of np.max()
-    #     time_grid = np.linspace(0, max_duration, 100)
-
-    #     brier_scores = self.brier_score(risk_pred, y, e)
-
-    #     return np.trapz(brier_scores, time_grid)
-
-    def integrated_brier_score(self, risk_pred, y, e):
-        y_np = y.detach().cpu().numpy()
-
-        max_duration = np.max(y_np)
-        #time_grid = np.linspace(0, max_duration, 100)
-        time_grid = np.linspace(0, 1095, 100)
-
-        brier_scores = self.brier_score(risk_pred, y, e)
-
-        return np.trapz(brier_scores, time_grid)
+        # Log C-index for the entire validation set
+        mlflow.log_metric('val_c_index_epoch', c_index_value)
+        print(f'Epoch {self.current_epoch + 1}, Validation C-Index: {c_index_value:.4f}')
 
     def training_step(self, batch, batch_idx):
         x, y, e = batch['x'], batch['y'][:, 0], batch['y'][:, 1]
         risk_pred = self.forward(x)
         loss = self.loss_fn(risk_pred, y, e)
-        c_index_value = self.c_index(risk_pred, y, e)
-        brier_scores = self.brier_score(risk_pred, y, e)
-        integrated_brier = self.integrated_brier_score(risk_pred, y, e)
+        # c_index_value = self.c_index(risk_pred, y, e)
 
         # Logging with MLflow
         mlflow.log_metric('train_loss', loss.item())
-        mlflow.log_metric('train_c_index', c_index_value)
-        mlflow.log_metric('train_integrated_brier', integrated_brier)
+        # mlflow.log_metric('train_c_index', c_index_value)
 
-        return {'loss': loss}
+        return {'loss': loss, 'risk_pred': risk_pred, 'y': y, 'e': e}
 
     def validation_step(self, batch, batch_idx):
         x, y, e = batch['x'], batch['y'][:, 0], batch['y'][:, 1]
         risk_pred = self.forward(x)
         loss = self.loss_fn(risk_pred, y, e)
-        c_index_value = self.c_index(risk_pred, y, e)
-        brier_scores = self.brier_score(risk_pred, y, e)
-        integrated_brier = self.integrated_brier_score(risk_pred, y, e)
+        # c_index_value = self.c_index(risk_pred, y, e)
 
         # Logging with MLflow
         mlflow.log_metric('val_loss', loss.item())
-        mlflow.log_metric('val_c_index', c_index_value)
-        mlflow.log_metric('val_integrated_brier', integrated_brier)
+        # mlflow.log_metric('val_c_index', c_index_value)
 
-        return {'loss': loss}
+        return {'loss': loss, 'risk_pred': risk_pred, 'y': y, 'e': e}
 
     def on_train_end(self):
         mlflow.end_run()
@@ -304,7 +250,7 @@ in_channels = x_train.shape[1]      # Number of input channels
 out_channels = 1                    # Number of output channels (1 for survival analysis)
 hidden_channels = [10, 10, 10]      # Number of output channels of each hidden layer (can be adjusted)
 dropout = 0.1                       # Hyperparameter, can be adjusted                
-l2_reg = 0                          # If this is not the case (l2_reg > 0), we need to make a regularisation class for the loss function to work! (see PyTorch model)
+l2_reg = 2                          # If this is not the case (l2_reg > 0), we need to make a regularisation class for the loss function to work! (see PyTorch model)
 
 max_epochs = 100
 model = Survivalmodel(in_channels=in_channels, out_channels=out_channels, hidden_channels=hidden_channels, dropout=dropout, l2_reg=l2_reg)
