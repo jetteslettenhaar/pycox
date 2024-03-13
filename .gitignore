@@ -116,3 +116,4 @@ output
 my_models
 mlruns
 lightning_logs
+figures

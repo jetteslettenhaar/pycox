@@ -90,19 +90,6 @@ print(test_df)
 train_df = train_df.fillna(0)
 test_df = test_df.fillna(0)
 
-# Count occurrences of 'e' in the train dataset
-train_e_counts = train_df['e'].value_counts()
-
-# Count occurrences of 'e' in the test dataset
-test_e_counts = test_df['e'].value_counts()
-
-# Display the counts
-print("Train dataset:")
-print(train_e_counts)
-
-print("\nTest dataset:")
-print(test_e_counts)
-
 # # Step 2d: Split into train and test set, but we do need to seperate the data (covariates) and corresponding labels (event, duration)
 # I should also create a train and test dataloader and convert the data to a tensor to actually use it in the model 
 
