@@ -16,8 +16,6 @@ from sklearn.preprocessing import StandardScaler
 from torch.utils.data import Dataset
 from torch.utils.data import DataLoader
 from lifelines.utils import concordance_index
-from lifelines import KaplanMeierFitter
-# from sksurv.metrics import concordance_index_censored
 
 from sksurv.metrics import brier_score
 from sksurv.metrics import integrated_brier_score
@@ -25,6 +23,7 @@ from sksurv.metrics import integrated_brier_score
 from monai.networks.nets import FullyConnectedNet
 
 import mlflow
+from pytorch_lightning.loggers import MLFlowLogger
 
 
 # --------------------------------------------------------------------------------------------------------
@@ -91,6 +90,19 @@ print(test_df)
 train_df = train_df.fillna(0)
 test_df = test_df.fillna(0)
 
+# Count occurrences of 'e' in the train dataset
+train_e_counts = train_df['e'].value_counts()
+
+# Count occurrences of 'e' in the test dataset
+test_e_counts = test_df['e'].value_counts()
+
+# Display the counts
+print("Train dataset:")
+print(train_e_counts)
+
+print("\nTest dataset:")
+print(test_e_counts)
+
 # # Step 2d: Split into train and test set, but we do need to seperate the data (covariates) and corresponding labels (event, duration)
 # I should also create a train and test dataloader and convert the data to a tensor to actually use it in the model 
 
@@ -113,7 +125,8 @@ train_dataset = SurvivalDataset(train_df)
 test_dataset = SurvivalDataset(test_df)
 
 # Create custom dataloaders
-batch_size = 32                     # Hyperparameter, can adjust this
+batch_size = 128                     # Hyperparameter, can adjust this
+# Splitten aanpassen zodat er balans in de data blijft 
 train_dataloader = DataLoader(train_dataset, batch_size=batch_size, shuffle=True)
 test_dataloader = DataLoader(test_dataset, batch_size=batch_size)
 
@@ -167,7 +180,7 @@ class Survivalmodel(pl.LightningModule):
         return self.model(x)
 
     def configure_optimizers(self):
-        optimizer = torch.optim.SGD(self.parameters(), lr=0.01)         # Learning rate is hyperparameter!
+        optimizer = torch.optim.SGD(self.parameters(), lr=0.001)         # Learning rate is hyperparameter!
         return optimizer
 
     def loss_fn(self, risk_pred, y, e):
@@ -216,6 +229,7 @@ class Survivalmodel(pl.LightningModule):
         # Log C-index for the entire validation set
         mlflow.log_metric('val_c_index_epoch', c_index_value)
         print(f'Epoch {self.current_epoch + 1}, Validation C-Index: {c_index_value:.4f}')
+        # De output moet de lengte zijn van de hele validatie/train dataset 
 
     def training_step(self, batch, batch_idx):
         x, y, e = batch['x'], batch['y'][:, 0], batch['y'][:, 1]
@@ -250,11 +264,13 @@ in_channels = x_train.shape[1]      # Number of input channels
 out_channels = 1                    # Number of output channels (1 for survival analysis)
 hidden_channels = [10, 10, 10]      # Number of output channels of each hidden layer (can be adjusted)
 dropout = 0.1                       # Hyperparameter, can be adjusted                
-l2_reg = 2                          # If this is not the case (l2_reg > 0), we need to make a regularisation class for the loss function to work! (see PyTorch model)
-
+l2_reg = 0                          # If this is not the case (l2_reg > 0), we need to make a regularisation class for the loss function to work! (see PyTorch model)
 max_epochs = 100
+
+mlflow_logger = MLFlowLogger(experiment_name="test_logging_working")
+
 model = Survivalmodel(in_channels=in_channels, out_channels=out_channels, hidden_channels=hidden_channels, dropout=dropout, l2_reg=l2_reg)
 model.to(device)
-trainer = pl.Trainer(max_epochs=max_epochs, accelerator='gpu', devices=1) # Do I need to put it on the GPU again? Or can I remove this?
+trainer = pl.Trainer(max_epochs=max_epochs, log_every_n_steps=10, logger=mlflow_logger, accelerator='gpu', devices=1) # Do I need to put it on the GPU again? Or can I remove this?
 
 trainer.fit(model,train_dataloaders=train_dataloader, val_dataloaders=test_dataloader)
