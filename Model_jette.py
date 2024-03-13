@@ -167,9 +167,10 @@ class Survivalmodel(pl.LightningModule):
         self.l2_reg = l2_reg        # Is this necessary? Or is it sufficient to only define it as the parameter above
         self.regularization = Regularization(order=2, weight_decay=self.l2_reg)
 
-        # We want to log everything (using MLflow)
+        self.mlflow_logger = MLFlowLogger(experiment_name="test_logging_working")
         mlflow.start_run()
-        mlflow.log_params({
+        # We want to log everything (using MLflow)
+        self.mlflow_logger.log_hyperparams({
             'in_channels': in_channels,
             'out_channels': out_channels,
             'hidden_channels': hidden_channels,
@@ -216,18 +217,31 @@ class Survivalmodel(pl.LightningModule):
         return concordance_index(y, -risk_pred, e) # Risk_pred should have a negative sign
 
     def training_epoch_end(self, outputs):
+
+        # Calculate average loss for the entire training set
+        average_loss = torch.stack([x['loss'] for x in outputs]).mean()
+
+        # Calculate the c index
         c_index_value = self.c_index(outputs[0]['risk_pred'], outputs[0]['y'], outputs[0]['e'])
+    
 
         # Log C-index for the entire training set
-        mlflow.log_metric('train_c_index_epoch', c_index_value)
+        self.mlflow_logger.log_metrics({'train_c_index_epoch': c_index_value})
+        self.mlflow_logger.log_metrics({'train_loss_epoch': average_loss.item()})
+        print(f'Training Epoch {self.current_epoch + 1}, Average Loss: {average_loss:.4f}')
         print(f'Epoch {self.current_epoch + 1}, Training C-Index: {c_index_value:.4f}')
 
     def validation_epoch_end(self, outputs):
+        # Calculate average loss for the entire validation set
+        average_loss = torch.stack([x['loss'] for x in outputs]).mean()
+
         # Calculate C-index for the entire validation set
         c_index_value = self.c_index(outputs[0]['risk_pred'], outputs[0]['y'], outputs[0]['e'])
 
         # Log C-index for the entire validation set
-        mlflow.log_metric('val_c_index_epoch', c_index_value)
+        self.mlflow_logger.log_metrics({'val_c_index_epoch': c_index_value})
+        self.mlflow_logger.log_metrics({'val_loss_epoch': average_loss.item()})
+        print(f'Validation Epoch {self.current_epoch + 1}, Average Loss: {average_loss:.4f}')
         print(f'Epoch {self.current_epoch + 1}, Validation C-Index: {c_index_value:.4f}')
         # De output moet de lengte zijn van de hele validatie/train dataset 
 
@@ -238,7 +252,7 @@ class Survivalmodel(pl.LightningModule):
         # c_index_value = self.c_index(risk_pred, y, e)
 
         # Logging with MLflow
-        mlflow.log_metric('train_loss', loss.item())
+        # mlflow.log_metric('train_loss', loss.item())
         # mlflow.log_metric('train_c_index', c_index_value)
 
         return {'loss': loss, 'risk_pred': risk_pred, 'y': y, 'e': e}
@@ -250,7 +264,7 @@ class Survivalmodel(pl.LightningModule):
         # c_index_value = self.c_index(risk_pred, y, e)
 
         # Logging with MLflow
-        mlflow.log_metric('val_loss', loss.item())
+        # mlflow.log_metric('val_loss', loss.item())
         # mlflow.log_metric('val_c_index', c_index_value)
 
         return {'loss': loss, 'risk_pred': risk_pred, 'y': y, 'e': e}
@@ -267,10 +281,9 @@ dropout = 0.1                       # Hyperparameter, can be adjusted
 l2_reg = 0                          # If this is not the case (l2_reg > 0), we need to make a regularisation class for the loss function to work! (see PyTorch model)
 max_epochs = 100
 
-mlflow_logger = MLFlowLogger(experiment_name="test_logging_working")
 
 model = Survivalmodel(in_channels=in_channels, out_channels=out_channels, hidden_channels=hidden_channels, dropout=dropout, l2_reg=l2_reg)
 model.to(device)
-trainer = pl.Trainer(max_epochs=max_epochs, log_every_n_steps=10, logger=mlflow_logger, accelerator='gpu', devices=1) # Do I need to put it on the GPU again? Or can I remove this?
+trainer = pl.Trainer(max_epochs=max_epochs, log_every_n_steps=10, logger=model.mlflow_logger, accelerator='gpu', devices=1) # Do I need to put it on the GPU again? Or can I remove this?
 
 trainer.fit(model,train_dataloaders=train_dataloader, val_dataloaders=test_dataloader)
