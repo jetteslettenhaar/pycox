@@ -174,7 +174,8 @@ class Survivalmodel(pl.LightningModule):
             'in_channels': in_channels,
             'out_channels': out_channels,
             'hidden_channels': hidden_channels,
-            'dropout': dropout
+            'dropout': dropout,
+            'l2_reg': l2_reg
         })
 
     def forward(self, x):
@@ -186,7 +187,7 @@ class Survivalmodel(pl.LightningModule):
 
     def loss_fn(self, risk_pred, y, e):
         mask = torch.ones(y.shape[0], y.shape[0]).to(device)
-        mask[(y.T - y) > 0] = 0
+        mask[(y.permute(*torch.arange(y.ndim - 1, -1, -1)) - y) > 0] = 0
         log_loss = torch.exp(risk_pred) * mask
         log_loss = torch.sum(log_loss, dim=0) / torch.sum(mask, dim=0)
         log_loss = torch.log(log_loss).reshape(-1, 1)
@@ -277,8 +278,8 @@ class Survivalmodel(pl.LightningModule):
 in_channels = x_train.shape[1]      # Number of input channels
 out_channels = 1                    # Number of output channels (1 for survival analysis)
 hidden_channels = [10, 10, 10]      # Number of output channels of each hidden layer (can be adjusted)
-dropout = 0.1                       # Hyperparameter, can be adjusted                
-l2_reg = 0                          # If this is not the case (l2_reg > 0), we need to make a regularisation class for the loss function to work! (see PyTorch model)
+dropout = 0.4                       # Hyperparameter, can be adjusted                
+l2_reg = 2                          # If this is not the case (l2_reg > 0), we need to make a regularisation class for the loss function to work! (see PyTorch model)
 max_epochs = 100
 
 
