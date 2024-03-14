@@ -169,8 +169,14 @@ class Survivalmodel(pl.LightningModule):
         return self.model(x)
 
     def configure_optimizers(self):
-        optimizer = torch.optim.SGD(self.parameters(), lr=0.001)         # Learning rate is hyperparameter!
-        return optimizer
+        optimizer = torch.optim.SGD(self.parameters(), lr=0.001)        # Learning rate is hyperparameter!
+
+        def lr_lambda(epoch):
+            lr_decay_rate = 0.1                                         # Learning rate decay is a hyperparameter!
+            return 1 / (1 + epoch * lr_decay_rate)                      # Inverse time decay function using epoch like in DeepSurv
+
+        scheduler = torch.optim.lr_scheduler.LambdaLR(optimizer, lr_lambda=lr_lambda)
+        return {"optimizer": optimizer, "scheduler": scheduler}
 
     def loss_fn(self, risk_pred, y, e):
         mask = torch.ones(y.shape[0], y.shape[0]).to(device)
@@ -237,11 +243,6 @@ class Survivalmodel(pl.LightningModule):
         x, y, e = batch['x'], batch['y'][:, 0], batch['y'][:, 1]
         risk_pred = self.forward(x)
         loss = self.loss_fn(risk_pred, y, e)
-        # c_index_value = self.c_index(risk_pred, y, e)
-
-        # Logging with MLflow
-        # mlflow.log_metric('train_loss', loss.item())
-        # mlflow.log_metric('train_c_index', c_index_value)
 
         return {'loss': loss, 'risk_pred': risk_pred, 'y': y, 'e': e}
 
@@ -249,11 +250,6 @@ class Survivalmodel(pl.LightningModule):
         x, y, e = batch['x'], batch['y'][:, 0], batch['y'][:, 1]
         risk_pred = self.forward(x)
         loss = self.loss_fn(risk_pred, y, e)
-        # c_index_value = self.c_index(risk_pred, y, e)
-
-        # Logging with MLflow
-        # mlflow.log_metric('val_loss', loss.item())
-        # mlflow.log_metric('val_c_index', c_index_value)
 
         return {'loss': loss, 'risk_pred': risk_pred, 'y': y, 'e': e}
 
