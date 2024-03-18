@@ -25,6 +25,8 @@ from monai.networks.nets import FullyConnectedNet
 import mlflow
 from pytorch_lightning.loggers import MLFlowLogger
 
+import optuna
+
 
 # --------------------------------------------------------------------------------------------------------
 
@@ -216,27 +218,29 @@ class Survivalmodel(pl.LightningModule):
         average_loss = torch.stack([x['loss'] for x in outputs]).mean()
 
         # Calculate the c index
-        c_index_value = self.c_index(outputs[0]['risk_pred'], outputs[0]['y'], outputs[0]['e'])
+        c_index_value_train = self.c_index(outputs[0]['risk_pred'], outputs[0]['y'], outputs[0]['e'])
     
 
         # Log C-index for the entire training set
-        self.mlflow_logger.log_metrics({'train_c_index_epoch': c_index_value})
+        self.mlflow_logger.log_metrics({'train_c_index_epoch': c_index_value_train})
         self.mlflow_logger.log_metrics({'train_loss_epoch': average_loss.item()})
         print(f'Training Epoch {self.current_epoch + 1}, Average Loss: {average_loss:.4f}')
-        print(f'Epoch {self.current_epoch + 1}, Training C-Index: {c_index_value:.4f}')
+        print(f'Epoch {self.current_epoch + 1}, Training C-Index: {c_index_value_train:.4f}')
 
     def validation_epoch_end(self, outputs):
         # Calculate average loss for the entire validation set
         average_loss = torch.stack([x['loss'] for x in outputs]).mean()
 
         # Calculate C-index for the entire validation set
-        c_index_value = self.c_index(outputs[0]['risk_pred'], outputs[0]['y'], outputs[0]['e'])
+        c_index_value_val = self.c_index(outputs[0]['risk_pred'], outputs[0]['y'], outputs[0]['e'])
 
         # Log C-index for the entire validation set
-        self.mlflow_logger.log_metrics({'val_c_index_epoch': c_index_value})
+        self.mlflow_logger.log_metrics({'val_c_index_epoch': c_index_value_val})
+        self.log('val_c_index', c_index_value_val)                                      # This is for my objective function!!
+        self.log("hp_metric", c_index_value_val, on_step=False, on_epoch=True)          # Log for Optuna
         self.mlflow_logger.log_metrics({'val_loss_epoch': average_loss.item()})
         print(f'Validation Epoch {self.current_epoch + 1}, Average Loss: {average_loss:.4f}')
-        print(f'Epoch {self.current_epoch + 1}, Validation C-Index: {c_index_value:.4f}')
+        print(f'Epoch {self.current_epoch + 1}, Validation C-Index: {c_index_value_val:.4f}')
         # De output moet de lengte zijn van de hele validatie/train dataset 
 
     def training_step(self, batch, batch_idx):
@@ -256,18 +260,55 @@ class Survivalmodel(pl.LightningModule):
     def on_train_end(self):
         mlflow.end_run()
 
-# Now lets try to actually train my model
-# Define parameters
-in_channels = x_train.shape[1]      # Number of input channels
-out_channels = 1                    # Number of output channels (1 for survival analysis)
-hidden_channels = [10, 10, 10]      # Number of output channels of each hidden layer (can be adjusted)
-dropout = 0.4                       # Hyperparameter, can be adjusted                
-l2_reg = 2                          # If this is not the case (l2_reg > 0), we need to make a regularisation class for the loss function to work! (see PyTorch model)
 max_epochs = 100
+# Setup objective function for Optuna
+def objective(trial: optuna.trial.Trial):
+    # Hyperparameters to be optimized 
+    in_channels = x_train.shape[1]
+    out_channels = 1
+    hidden_channels = [trial.suggest_int("hidden_size_1", 10, 100),
+                       trial.suggest_int("hidden_size_2", 10, 100),
+                       trial.suggest_int("hidden_size_3", 10, 100)]
+    dropout = trial.suggest_float("dropout", 0.1, 0.5)
+    l2_reg = trial.suggest_float("l2_reg", 0, 20)
+
+    # Define the actual model
+    model = Survivalmodel(in_channels=in_channels, out_channels=out_channels, hidden_channels=hidden_channels, dropout=dropout, l2_reg=l2_reg)
+    model.to(device)
+    trainer = pl.Trainer(max_epochs=max_epochs, log_every_n_steps=10, logger=model.mlflow_logger, accelerator='gpu', devices=1)
+    trainer.fit(model,train_dataloaders=train_dataloader, val_dataloaders=test_dataloader)
+
+    # Get the validation C-index logged by LightningModule
+    c_index_value_val = trainer.callback_metrics['val_c_index']
+
+    return c_index_value_val
 
 
-model = Survivalmodel(in_channels=in_channels, out_channels=out_channels, hidden_channels=hidden_channels, dropout=dropout, l2_reg=l2_reg)
-model.to(device)
-trainer = pl.Trainer(max_epochs=max_epochs, log_every_n_steps=10, logger=model.mlflow_logger, accelerator='gpu', devices=1) # Do I need to put it on the GPU again? Or can I remove this?
+# Create an Optuna study and optimize hyperparameters
+study = optuna.create_study(direction="maximize")
+study.optimize(objective, n_trials=100)
 
-trainer.fit(model,train_dataloaders=train_dataloader, val_dataloaders=test_dataloader)
+# Get the best hyperparameters
+best_params = study.best_params
+
+# Use the best hyperparameters to train your final model
+final_model = Survivalmodel(**best_params)
+trainer = pl.Trainer(max_epochs=max_epochs, logger=model.mlflow_logger, accelerator='gpu', devices=1)
+trainer.fit(final_model,train_dataloaders=train_dataloader, val_dataloaders=test_dataloader)
+
+# # Now lets try to actually train my model
+# # Define parameters
+# in_channels = x_train.shape[1]      # Number of input channels
+# out_channels = 1                    # Number of output channels (1 for survival analysis)
+# hidden_channels = [10, 10, 10]      # Number of output channels of each hidden layer (can be adjusted)
+# dropout = 0.4                       # Hyperparameter, can be adjusted                
+# l2_reg = 2                          # If this is not the case (l2_reg > 0), we need to make a regularisation class for the loss function to work! (see PyTorch model)
+# max_epochs = 100
+
+
+# model = Survivalmodel(in_channels=in_channels, out_channels=out_channels, hidden_channels=hidden_channels, dropout=dropout, l2_reg=l2_reg)
+# model.to(device)
+# trainer = pl.Trainer(max_epochs=max_epochs, log_every_n_steps=10, logger=model.mlflow_logger, accelerator='gpu', devices=1) # Do I need to put it on the GPU again? Or can I remove this?
+
+# trainer.fit(model,train_dataloaders=train_dataloader, val_dataloaders=test_dataloader)
+
