@@ -292,8 +292,14 @@ study.optimize(objective, n_trials=100)
 best_params = study.best_params
 
 # Use the best hyperparameters to train your final model
-final_model = Survivalmodel(**best_params)
-trainer = pl.Trainer(max_epochs=max_epochs, logger=model.mlflow_logger, accelerator='gpu', devices=1)
+# Use the best hyperparameters to train your final model
+final_model = Survivalmodel(in_channels=x_train.shape[1],           # Number of input channels
+                            out_channels=1,                         # Number of output channels (1 for survival analysis)
+                            hidden_channels=[best_params[f"hidden_size_{i+1}"] for i in range(3)],  # Number of output channels of each hidden layer
+                            dropout=best_params["dropout"],         # Pass dropout directly
+                            l2_reg=best_params["l2_reg"])           # Pass l2_reg directly
+
+trainer = pl.Trainer(max_epochs=max_epochs, logger=final_model.mlflow_logger, accelerator='gpu', devices=1)
 trainer.fit(final_model,train_dataloaders=train_dataloader, val_dataloaders=test_dataloader)
 
 # # Now lets try to actually train my model
