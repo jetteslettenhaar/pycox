@@ -37,7 +37,18 @@ for subject_name in os.listdir(image_path):
         subject_info = labels_death.merge(subject_df, on='participant_id', how='inner')
         print(subject_info)
 
-    nifti_path = os.path.join(image_path, subject_name, 'NIFTI', os.listdir(os.path.join(image_path, subject_name, 'NIFTI'))[0])
+        # Check if the 'NIFTI' directory exists for the current subject
+        nifti_dir = os.path.join(image_path, subject_name, 'NIFTI')
+        if os.path.exists(nifti_dir) and os.path.isdir(nifti_dir):
+            # Check if there are files in the 'NIFTI' directory
+            nifti_files = os.listdir(nifti_dir)
+            if nifti_files:
+                nifti_path = os.path.join(nifti_dir, nifti_files[0])
+                print("NIFTI file path:", nifti_path)
+            else:
+                print("No files found in the 'NIFTI' directory for subject:", subject_name)
+        else:
+            print("'NIFTI' directory not found for subject:", subject_name)
 
     # Create the dictionary
     patient_dict = {
