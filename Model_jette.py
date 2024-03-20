@@ -88,9 +88,13 @@ test_df[stand_col] = scalar.fit_transform(test_df[stand_col])
 print(train_df)
 print(test_df)
 
-# We need to find out where this is coming from!!! Somehow, sometimes the y is NaN
-train_df = train_df.fillna(0)
-test_df = test_df.fillna(0)
+# Set the threshold and remove everyone above that threshold (this cannot be true). Threshold chosen at year 2000 (24 years ago)
+# We also need to get rid of everything that is NaN
+threshold_value = 8760
+train_df = train_df[train_df['y'] <= threshold_value]
+test_df = test_df[test_df['y'] <= threshold_value]
+train_df = train_df.dropna()
+test_df = test_df.dropna()
 
 # # Step 2d: Split into train and test set, but we do need to seperate the data (covariates) and corresponding labels (event, duration)
 # I should also create a train and test dataloader and convert the data to a tensor to actually use it in the model 
@@ -114,7 +118,7 @@ train_dataset = SurvivalDataset(train_df)
 test_dataset = SurvivalDataset(test_df)
 
 # Create custom dataloaders
-batch_size = 128                     # Hyperparameter, can adjust this
+batch_size = len(test_dataset)                     # Hyperparameter, can adjust this
 # Splitten aanpassen zodat er balans in de data blijft 
 train_dataloader = DataLoader(train_dataset, batch_size=batch_size, shuffle=True)
 test_dataloader = DataLoader(test_dataset, batch_size=batch_size)
@@ -178,7 +182,7 @@ class Survivalmodel(pl.LightningModule):
             return 1 / (1 + epoch * lr_decay_rate)                      # Inverse time decay function using epoch like in DeepSurv
 
         scheduler = torch.optim.lr_scheduler.LambdaLR(optimizer, lr_lambda=lr_lambda)
-        return {"optimizer": optimizer, "scheduler": scheduler}
+        return [optimizer], [scheduler]
 
     def loss_fn(self, risk_pred, y, e):
         mask = torch.ones(y.shape[0], y.shape[0]).to(device)
@@ -207,8 +211,6 @@ class Survivalmodel(pl.LightningModule):
             risk_pred = risk_pred.detach().cpu().numpy().squeeze()
         if not isinstance(e, np.ndarray):
             e = e.detach().cpu().numpy()
-            threshold = 0.5 
-            e = e > threshold
 
         return concordance_index(y, -risk_pred, e) # Risk_pred should have a negative sign
 
@@ -216,51 +218,48 @@ class Survivalmodel(pl.LightningModule):
 
         # Calculate average loss for the entire training set
         average_loss = torch.stack([x['loss'] for x in outputs]).mean()
-
-        # Calculate the c index
-        c_index_value_train = self.c_index(outputs[0]['risk_pred'], outputs[0]['y'], outputs[0]['e'])
-    
+        average_c_index = np.mean([x['c_index'] for x in outputs])
 
         # Log C-index for the entire training set
-        self.mlflow_logger.log_metrics({'train_c_index_epoch': c_index_value_train})
+        self.mlflow_logger.log_metrics({'train_c_index_epoch': average_c_index})
         self.mlflow_logger.log_metrics({'train_loss_epoch': average_loss.item()})
         print(f'Training Epoch {self.current_epoch + 1}, Average Loss: {average_loss:.4f}')
-        print(f'Epoch {self.current_epoch + 1}, Training C-Index: {c_index_value_train:.4f}')
+        print(f'Epoch {self.current_epoch + 1}, Training C-Index: {average_c_index:.4f}')
 
     def validation_epoch_end(self, outputs):
         # Calculate average loss for the entire validation set
         average_loss = torch.stack([x['loss'] for x in outputs]).mean()
-
-        # Calculate C-index for the entire validation set
-        c_index_value_val = self.c_index(outputs[0]['risk_pred'], outputs[0]['y'], outputs[0]['e'])
+        average_c_index = np.mean([x['c_index'] for x in outputs])
 
         # Log C-index for the entire validation set
-        self.mlflow_logger.log_metrics({'val_c_index_epoch': c_index_value_val})
-        self.log('val_c_index', c_index_value_val)                                      # This is for my objective function!!
-        self.log("hp_metric", c_index_value_val, on_step=False, on_epoch=True)          # Log for Optuna
+        self.mlflow_logger.log_metrics({'val_c_index_epoch': average_c_index})
+        self.log('val_c_index', average_c_index)                                      # This is for my objective function!!
+        self.log("hp_metric", average_c_index, on_step=False, on_epoch=True)          # Log for Optuna
         self.mlflow_logger.log_metrics({'val_loss_epoch': average_loss.item()})
         print(f'Validation Epoch {self.current_epoch + 1}, Average Loss: {average_loss:.4f}')
-        print(f'Epoch {self.current_epoch + 1}, Validation C-Index: {c_index_value_val:.4f}')
+        print(f'Epoch {self.current_epoch + 1}, Validation C-Index: {average_c_index:.4f}')
         # De output moet de lengte zijn van de hele validatie/train dataset 
 
     def training_step(self, batch, batch_idx):
         x, y, e = batch['x'], batch['y'][:, 0], batch['y'][:, 1]
         risk_pred = self.forward(x)
         loss = self.loss_fn(risk_pred, y, e)
+        c_index = self.c_index(risk_pred, y, e)
 
-        return {'loss': loss, 'risk_pred': risk_pred, 'y': y, 'e': e}
+        return {'loss': loss, 'c_index': c_index, 'risk_pred': risk_pred, 'y': y, 'e': e}
 
     def validation_step(self, batch, batch_idx):
         x, y, e = batch['x'], batch['y'][:, 0], batch['y'][:, 1]
         risk_pred = self.forward(x)
         loss = self.loss_fn(risk_pred, y, e)
+        c_index = self.c_index(risk_pred, y, e)
 
-        return {'loss': loss, 'risk_pred': risk_pred, 'y': y, 'e': e}
+        return {'loss': loss, 'c_index': c_index, 'risk_pred': risk_pred, 'y': y, 'e': e}
 
     def on_train_end(self):
         mlflow.end_run()
 
-max_epochs = 100
+max_epochs = 300
 # Setup objective function for Optuna
 def objective(trial: optuna.trial.Trial):
     # Hyperparameters to be optimized 
@@ -286,7 +285,7 @@ def objective(trial: optuna.trial.Trial):
 
 # Create an Optuna study and optimize hyperparameters
 study = optuna.create_study(direction="maximize")
-study.optimize(objective, n_trials=100)
+study.optimize(objective, n_trials=10)
 
 # Get the best hyperparameters
 best_params = study.best_params
@@ -299,7 +298,7 @@ final_model = Survivalmodel(in_channels=x_train.shape[1],           # Number of 
                             dropout=best_params["dropout"],         # Pass dropout directly
                             l2_reg=best_params["l2_reg"])           # Pass l2_reg directly
 
-trainer = pl.Trainer(max_epochs=max_epochs, logger=final_model.mlflow_logger, accelerator='gpu', devices=1)
+trainer = pl.Trainer(max_epochs=max_epochs, log_every_n_steps=10, logger=final_model.mlflow_logger, accelerator='gpu', devices=1)
 trainer.fit(final_model,train_dataloaders=train_dataloader, val_dataloaders=test_dataloader)
 
 # # Now lets try to actually train my model
