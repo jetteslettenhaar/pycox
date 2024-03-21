@@ -1,3 +1,9 @@
+'''
+We will start by preparing a dictionary.
+This dictionary should be one dictionary for each patient with the image_path, duration and event 0/1.
+All dictionaries of all patients should be placed in a list
+'''
+
 # Lets start again by importing the important things
 import torch
 from torch import nn
@@ -11,6 +17,12 @@ import os
 import nibabel as nib
 
 from monai.networks.nets import ResNet
+from monai.transforms import (
+    LoadImaged
+    EnsureChannelFirstd
+    Orientationd
+    Spacingd
+)
 
 # Import CSV file to get the labels of my images (pickle does not work with this (old) Python version)
 labels = pd.read_csv('my_models/outcome_model_imaging.csv', delimiter=',')
@@ -21,6 +33,8 @@ print(labels)
 labels_death = labels[['participant_id', 'Duration_death', 'Event_death']]
 labels_RFS = labels[['participant_id', 'Duration_RFS', 'Event_RFS']]
 
+
+# Lets make a dictionary of the subject, imagepath, duration and event!
 image_path = '/data/scratch/r098372/beelden'
 
 patient_info_list = []
@@ -64,3 +78,34 @@ for subject_name in os.listdir(image_path):
 # Print the list of patient dictionaries
 for patient_dict in patient_info_list:
     print(patient_dict)
+
+
+
+'''
+The data has been prepared in a dictionary! 
+Now we need to actually make the model which contains 'prepare_data' function to actually load the dictionary.
+'''
+
+# Let set up device agnostic code
+device = "cuda" if torch.cuda.is_available() else "cpu"
+
+# Set manual seed
+seed = 42
+torch.manual_seed(seed)
+torch.cuda.manual_seed(seed)
+
+class ResNet(pl.LightningModule):
+    def __init__(self):
+        self.model = Densenet121(
+            spatial_dims=3,
+            in_channels=1,
+            out_channels=1
+        )
+        self.model.to(device)
+
+    def forward(self, x):
+        return self.model(x)
+
+    def prepare_data(self):
+        
+
