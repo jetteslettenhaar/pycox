@@ -232,25 +232,12 @@ class Survivalmodel(pl.LightningModule):
         self.mlflow_logger.log_metrics({'val_c_index': c_index})
         self.mlflow_logger.log_metrics({'val_loss': loss.item()})
 
-        return {'loss': loss, 'c_index': c_index, 'risk_pred': risk_pred, 'y': y, 'e': e}
-
-    def validation_epoch_end(self, outputs):
-        average_loss = torch.stack([x['loss'] for x in outputs]).mean()
-        average_c_index = torch.stack([torch.tensor(x['c_index']) for x in outputs]).mean()
-        val_c_index = average_c_index.item()
-
-        # Log C-index and loss for the entire validation set
-        self.mlflow_logger.log_metrics({'val_c_index_epoch': val_c_index})
-        self.mlflow_logger.log_metrics({'val_loss_epoch': average_loss.item()})
-
         # Check if the current c-index is better than the previous best
-        if average_c_index > self.best_c_index:
-            self.best_c_index = average_c_index
+        if c_index > self.best_c_index:
+            self.best_c_index = c_index
             self.best_model_state = self.model.state_dict().copy()  # Save the model state
 
-        print(f'Validation Epoch {self.current_epoch + 1}, Average Loss: {average_loss:.4f}')
-        print(f'Epoch {self.current_epoch + 1}, Validation C-Index: {average_c_index:.4f}')
-        print(self.best_c_index)
+        return {'loss': loss, 'c_index': c_index, 'risk_pred': risk_pred, 'y': y, 'e': e}
 
     def on_train_start(self):
         self.best_c_index = 0.0  # Initialize the best c-index to 0
@@ -265,7 +252,6 @@ class Survivalmodel(pl.LightningModule):
 # Define parameters  
 l2_reg = 0                          # If this is not the case (l2_reg > 0), we need to make a regularisation class for the loss function to work! (see PyTorch model)
 max_epochs = 500
-
 
 model = Survivalmodel(l2_reg=l2_reg)
 model.to(device)

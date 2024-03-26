@@ -117,3 +117,4 @@ my_models
 mlruns
 lightning_logs
 figures
+best_model.pth
