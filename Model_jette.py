@@ -46,21 +46,96 @@ torch.cuda.manual_seed(seed)
 # I should also create a train and test dataloader and convert the data to a tensor to actually use it in the model 
 
 class SurvivalDataset(Dataset):
-    def __init__(self, dataframe):
-        # Needed to make a dataloader in PyTorch
-        self.dataframe = dataframe
+    ''' The dataset class performs loading data from .h5 file. '''
+    def __init__(self, is_train, threshold_value=8760, sampling=None):
+        ''' Loading data from .h5 file based on (is_train).
+
+        :param is_train: (bool) which kind of data to be loaded?
+                is_train=True: loading train data
+                is_train=False: loading test data
+        :param threshold_value: (int) threshold value to filter out samples with 'y' values above this threshold
+        :param sampling: (str) sampling strategy: "upsampling" or "downsampling"
+        '''
+        self.h5_file = 'my_models/simple_model_all.h5'  # Default path to .h5 file
+        # loads data
+        self.X, self.e, self.y = self._read_h5_file(is_train)
+        # normalizes data
+        self._normalize()
+        # apply threshold
+        self._apply_threshold(threshold_value)
+        # balance classes
+        if is_train and sampling:
+            self._balance_classes(sampling)
+
+        print('=> load {} samples'.format(self.X.shape[0]))
+
+    def _apply_threshold(self, threshold_value):
+        ''' Filters out samples with 'y' values above the threshold value '''
+        above_threshold = self.y.squeeze() > threshold_value
+        self.X = self.X[~above_threshold]
+        self.e = self.e[~above_threshold]
+        self.y = self.y[~above_threshold]
+
+    def _balance_classes(self, sampling):
+        ''' Balances the classes using upsampling or downsampling '''
+        df = pd.DataFrame(np.concatenate([self.X, self.e, self.y], axis=1), columns=['x', 'e', 'y'])
+        minority = df[df['e'] == 1]
+        majority = df[df['e'] == 0]
+        
+        if sampling == "upsampling":
+            minority_upsampled = resample(minority,
+                                          replace=True,
+                                          n_samples=len(majority),
+                                          random_state=seed)
+            df = pd.concat([majority, minority_upsampled])
+        elif sampling == "downsampling":
+            majority_downsampled = resample(majority,
+                                            replace=False,
+                                            n_samples=len(minority),
+                                            random_state=seed)
+            df = pd.concat([minority, majority_downsampled])
+
+        self.X = df['x'].values
+        self.e = df['e'].values
+        self.y = df['y'].values
+
+    def _read_h5_file(self, is_train):
+        ''' The function to parsing data from .h5 file.
+
+        :return X: (np.array) (n, m)
+            m is features dimension.
+        :return e: (np.array) (n, 1)
+            whether the event occurs? (1: occurs; 0: others)
+        :return y: (np.array) (n, 1)
+            the time of event e.
+        '''
+        split = 'train' if is_train else 'test'
+        with h5py.File(self.h5_file, 'r') as f:
+            X = f[split]['x'][()]
+            e = f[split]['e'][()].reshape(-1, 1)
+            y = f[split]['t'][()].reshape(-1, 1)
+        return X, e, y
+
+    def _normalize(self):
+        ''' Performs normalizing X data. '''
+        self.X = (self.X - self.X.min(axis=0)) / (self.X.max(axis=0) - self.X.min(axis=0))
+
+    def __getitem__(self, item):
+        ''' Performs constructing torch.Tensor object'''
+        # gets data with index of item
+        X_item = self.X[item] # (m)
+        e_item = self.e[item] # (1)
+        y_item = self.y[item] # (1)
+        # constructs torch.Tensor object
+        X_tensor = torch.from_numpy(X_item)
+        e_tensor = torch.from_numpy(e_item)
+        y_tensor = torch.from_numpy(y_item)
+        return {'x': X_tensor, 'y': y_tensor, 'e': e_tensor}
 
     def __len__(self):
-        # Needed to make a dataloader in PyTorch
-        return len(self.dataframe)
-
-    def __getitem__(self, idx):
-        x = torch.tensor(self.dataframe.iloc[idx, :-2].values, dtype=torch.float32).to(device)  # Exclude 'y' and 'e'
-        y = torch.tensor(self.dataframe.iloc[idx, -2:].values, dtype=torch.float32).to(device)  # 'y' and 'e'
-        return {'x': x, 'y': y}
+        return self.X.shape[0]
 
 # --------------------------------------------------------------------------------------------------------
-
 # Step 3 Build a model
 
 class Regularization(object):
@@ -88,27 +163,45 @@ class Regularization(object):
         return reg_loss
 
 class Survivalmodel(pl.LightningModule):
-    def __init__(self, in_channels, out_channels, hidden_channels, dropout, l2_reg, run_name):
+    def __init__(self, input_dim, dim_2, dim_3, drop, l2_reg):
         super().__init__()
         # We use the FullyConnectedNet as a model to replicate DeepSurv
-        self.model = FullyConnectedNet(in_channels=in_channels, out_channels=out_channels, hidden_channels=hidden_channels, dropout=dropout)
-        self.model.to(device)       # Move model to GPU
-        self.l2_reg = l2_reg        # Is this necessary? Or is it sufficient to only define it as the parameter above
+        self.best_c_index = 0.0
+        self.drop = drop
+        self.input_dim = input_dim
+        self.dim_2 = dim_2
+        self.dim_3 = dim_3
+        self.model = self._build_network()
+        self.model.to(device)
+        self.l2_reg = l2_reg
         self.regularization = Regularization(order=2, weight_decay=self.l2_reg)
 
-        self.mlflow_logger = MLFlowLogger(experiment_name="test_logging_working", run_name=run_name)
+        self.mlflow_logger = MLFlowLogger(experiment_name="test_model", run_name="test_one")
         mlflow.start_run()
         # We want to log everything (using MLflow)
         self.mlflow_logger.log_hyperparams({
-            'in_channels': in_channels,
-            'out_channels': out_channels,
-            'hidden_channels': hidden_channels,
-            'dropout': dropout,
-            'l2_reg': l2_reg
+            'l2_reg': l2_reg,
+            'drop': self.drop,
+            'input_dim': self.input_dim,
+            'dim_2': self.dim_2,
+            'dim_3': self.dim_3
         })
 
+    def _build_network(self):
+        layers = []
+        layers.append(nn.Linear(self.input_dim, self.dim_2))  # Fixed input dimension of the first linear layer
+        layers.append(nn.BatchNorm1d(self.dim_2))
+        layers.append(nn.SELU())
+        layers.append(nn.Dropout(self.drop))
+        layers.append(nn.Linear(self.dim_2, self.dim_3))  # Second linear layer with variable dimension
+        layers.append(nn.BatchNorm1d(self.dim_3))
+        layers.append(nn.SELU())
+        layers.append(nn.Dropout(self.drop))
+        layers.append(nn.Linear(self.dim_3, 1))  # Third linear layer with variable dimension
+        return nn.Sequential(*layers)
+
     def forward(self, x):
-        return self.model(x)
+        return self.model(x.to(torch.float32))
 
     def configure_optimizers(self):
         optimizer = torch.optim.SGD(self.parameters(), lr=0.001)        # Learning rate is hyperparameter!
@@ -144,81 +237,70 @@ class Survivalmodel(pl.LightningModule):
         if not isinstance(y, np.ndarray):
             y = y.detach().cpu().numpy()
         if not isinstance(risk_pred, np.ndarray):
-            risk_pred = risk_pred.detach().cpu().numpy().squeeze()
+            risk_pred = risk_pred.detach().cpu().numpy()
         if not isinstance(e, np.ndarray):
             e = e.detach().cpu().numpy()
 
-        return concordance_index(y, -risk_pred, e) # Risk_pred should have a negative sign
-
-    def training_epoch_end(self, outputs):
-
-        # Calculate average loss for the entire training set
-        average_loss = torch.stack([x['loss'] for x in outputs]).mean()
-        average_c_index = np.mean([x['c_index'] for x in outputs])
-
-        # Log C-index for the entire training set
-        self.mlflow_logger.log_metrics({'train_c_index_epoch': average_c_index})
-        self.mlflow_logger.log_metrics({'train_loss_epoch': average_loss.item()})
-        print(f'Training Epoch {self.current_epoch + 1}, Average Loss: {average_loss:.4f}')
-        print(f'Epoch {self.current_epoch + 1}, Training C-Index: {average_c_index:.4f}')
-
-    def validation_epoch_end(self, outputs):
-        # Calculate average loss for the entire validation set
-        average_loss = torch.stack([x['loss'] for x in outputs]).mean()
-        average_c_index = np.mean([x['c_index'] for x in outputs])
-
-        # Log C-index for the entire validation set
-        self.mlflow_logger.log_metrics({'val_c_index_epoch': average_c_index})
-        self.log('val_c_index', average_c_index)                                      # This is for my objective function!!
-        self.log("hp_metric", average_c_index, on_step=False, on_epoch=True)          # Log for Optuna
-        self.mlflow_logger.log_metrics({'val_loss_epoch': average_loss.item()})
-        print(f'Validation Epoch {self.current_epoch + 1}, Average Loss: {average_loss:.4f}')
-        print(f'Epoch {self.current_epoch + 1}, Validation C-Index: {average_c_index:.4f}')
-        # De output moet de lengte zijn van de hele validatie/train dataset 
-
-        # Verplaatsen naar validation_step
+        return concordance_index(y, risk_pred, e) # Risk_pred should have a negative sign
 
     def training_step(self, batch, batch_idx):
-        x, y, e = batch['x'], batch['y'][:, 0], batch['y'][:, 1]
+        x, y, e = batch['x'], batch['y'], batch['e']
         risk_pred = self.forward(x)
         loss = self.loss_fn(risk_pred, y, e)
-        c_index = self.c_index(risk_pred, y, e)
+        c_index = self.c_index(-risk_pred, y, e)
+        self.mlflow_logger.log_metrics({'train_c_index': c_index})
+        self.mlflow_logger.log_metrics({'train_loss': loss.item()})
 
         return {'loss': loss, 'c_index': c_index, 'risk_pred': risk_pred, 'y': y, 'e': e}
 
     def validation_step(self, batch, batch_idx):
-        x, y, e = batch['x'], batch['y'][:, 0], batch['y'][:, 1]
+        x, y, e = batch['x'], batch['y'], batch['e']
         risk_pred = self.forward(x)
         loss = self.loss_fn(risk_pred, y, e)
-        c_index = self.c_index(risk_pred, y, e)
+        c_index = self.c_index(-risk_pred, y, e)
+
+        self.mlflow_logger.log_metrics({'val_c_index': c_index})
+        self.mlflow_logger.log_metrics({'val_loss': loss.item()})
+        self.log('val_c_index_objective', c_index)
+
+        # Check if the current c-index is better than the previous best
+        if c_index > self.best_c_index:
+            self.best_c_index = c_index
+            self.best_model_state = self.model.state_dict().copy()  # Save the model state
 
         return {'loss': loss, 'c_index': c_index, 'risk_pred': risk_pred, 'y': y, 'e': e}
 
+    def on_train_start(self):
+        self.best_c_index = 0.0  # Initialize the best c-index to 0
+
     def on_train_end(self):
+        print(f'Best C-Index: {self.best_c_index:.4f}')
+        # Save the best model
+        torch.save({'model': self.best_model_state}, 'best_model.pth')
         mlflow.end_run()
 
 max_epochs = 300
 # Setup objective function for Optuna
-def objective(trial: optuna.trial.Trial, run_name):
-    # Hyperparameters to be optimized 
-    in_channels = x_train.shape[1]
-    out_channels = 1
-    hidden_channels = [trial.suggest_int("hidden_size_1", 10, 100),
-                       trial.suggest_int("hidden_size_2", 10, 100),
-                       trial.suggest_int("hidden_size_3", 10, 100)]
-    dropout = trial.suggest_float("dropout", 0.1, 0.5)
+def objective(trial: optuna.trial.Trial):
+    # Hyperparameters to be optimized
+    dim_2 = trial.suggest_int("dim_2", 1, 100)
+    dim_3 = trial.suggest_int("dim_3", 1, 100)
+    drop = trial.suggest_float("drop", 0.1, 0.5)
     l2_reg = trial.suggest_float("l2_reg", 0, 20)
 
     # Define the actual model
-    model = Survivalmodel(in_channels=in_channels, out_channels=out_channels, hidden_channels=hidden_channels, dropout=dropout, l2_reg=l2_reg, run_name="downsample")
+    model = Survivalmodel(input_dim=int(train_dataset.X.shape[1]), dim_2=dim_2, dim_3=dim_3, drop=drop, l2_reg=l2_reg)
     model.to(device)
-    trainer = pl.Trainer(max_epochs=max_epochs, log_every_n_steps=10, logger=model.mlflow_logger, accelerator='gpu', devices=1)
+    trainer = pl.Trainer(max_epochs=max_epochs, logger=model.mlflow_logger, accelerator='gpu', devices=1)
     trainer.fit(model,train_dataloaders=train_dataloader, val_dataloaders=test_dataloader)
 
     # Get the validation C-index logged by LightningModule
-    c_index_value_val = trainer.callback_metrics['val_c_index']
+    c_index_value_val = trainer.callback_metrics['val_c_index_objective']
 
     return c_index_value_val
+
+
+
 
 if __name__ == "__main__":
     parser = argparse.ArgumentParser(
@@ -227,133 +309,39 @@ if __name__ == "__main__":
     parser.add_argument("-s", "--sampling", default="False", required=False, type=str, help="if and which sampling method to use.")
 
     args = parser.parse_args()
-    # Step 2: Get data ready (turn into tensors)
-    # Step 2a: Turn data into numbers --> my data is already in numbers since I used One Hot Encoding
+    
+    # Create train dataset
+    train_dataset = SurvivalDataset(is_train=True)
+    test_dataset = SurvivalDataset(is_train=False)
 
-    # Step 2b: Load the data
-    '''
-    X: covariates of the model
-    e: whether the event (death or RFS) occurs? (1: occurs; 0: censored)
-    t/y: the time of event e.
-    '''
-    filepath = 'my_models/simple_model_all.h5'
-
-    with h5py.File(filepath, 'r') as f:
-        data = {'train': {}, 'test': {}}
-        for datasets in f:
-            for array in f[datasets]:
-                data[datasets][array] = f[datasets][array][:]
-
-    x_train = data['train']['x']
-    t_train = data['train']['t']
-    e_train = data['train']['e']
-
-    x_test = data['test']['x']
-    t_test = data['test']['t']
-    e_test = data['test']['e']
-
-    columns = ['x' +str(i) for i in range(x_train.shape[1])]
-
-    train_df = (pd.DataFrame(x_train, columns=columns)
-                    .assign(y=t_train)
-                    .assign(e=e_train))
-
-    test_df = (pd.DataFrame(x_test, columns=columns)
-                .assign(y=t_test)
-                .assign(e=e_test))
-
-    # Maybe put this together, if I want a validation dataset --> Possible later
-    print(train_df)
-    print(test_df)
-
-    # Step 2c: Standardize covariates
-    # stand_col = ['x12', 'x13', 'x14', 'x15'] # This is for model with 159 subjects
-    stand_col = ['x15', 'x16', 'x17', 'x18']
-    scalar = StandardScaler()
-    train_df[stand_col] = scalar.fit_transform(train_df[stand_col])
-    test_df[stand_col] = scalar.fit_transform(test_df[stand_col])
-
-    print(train_df)
-    print(test_df)
-
-    # Set the threshold and remove everyone above that threshold (this cannot be true). Threshold chosen at year 2000 (24 years ago)
-    # We also need to get rid of everything that is NaN
-    threshold_value = 8760
-    train_df = train_df[train_df['y'] <= threshold_value]
-    test_df = test_df[test_df['y'] <= threshold_value]
-    train_df = train_df.dropna()
-    test_df = test_df.dropna()
-
-    # -------------------------------------------------------------------------------------------------------------------------------------------
-    '''
-    Now we have a very unbalanced dataset. We can make sure we have a more balanced dataset by doing upsampling of e=1, or downsampling of event=0
-    We can perform upsampling by randomly duplicating instances of the minority class (e=1).
-    We can perform downsampling by randomly removing instances from the majority class (e=0). 
-    We are only going to resample the training set (this is apparantly good practice)
-    '''
-
-    train_minority = train_df[train_df['e'] == 1.0]
-    train_majority = train_df[train_df['e'] == 0.0]
-
-    # Upsample the minority class (e=1)
-    if args.sampling == "upsampling":
-        train_minority_upsampled = resample(train_minority,
-                                            replace=True,
-                                            n_samples=len(train_majority),
-                                            random_state=seed)
-
-        train_df = pd.concat([train_majority, train_minority_upsampled])
-
-    if args.sampling == "downsampling":
-        # Downsample the majority class (e=0)
-        train_majority_downsampled = resample(train_majority,
-                                            replace=False,
-                                            n_samples=len(train_minority),
-                                            random_state=seed)
-
-        train_df = pd.concat([train_minority, train_majority_downsampled])
-
-
-    # Create custom datasets
-    train_dataset = SurvivalDataset(train_df)           # Either normal (train_df), upsampled (train_upsampled), or downsampled (train_downsampled)
-    test_dataset = SurvivalDataset(test_df)
+    print(train_dataset)
+    print(test_dataset)
+    print(train_dataset.X.shape[1])
 
     # Create custom dataloaders
-    batch_size = len(test_dataset)                     # Hyperparameter, can adjust this
-    # Splitten aanpassen zodat er balans in de data blijft 
-    train_dataloader = DataLoader(train_dataset, batch_size=batch_size, shuffle=True)
-    test_dataloader = DataLoader(test_dataset, batch_size=batch_size)
+    train_dataloader = DataLoader(train_dataset, batch_size=len(train_dataset), shuffle=True)
+    test_dataloader = DataLoader(test_dataset, batch_size=len(test_dataset))
+
+
+
+
     # Create an Optuna study and optimize hyperparameters
     study = optuna.create_study(direction="maximize")
-    study.optimize(objective, run_name=f"model_{args.sampling}" n_trials=10)
+    study.optimize(objective, n_trials=10)
 
     # Get the best hyperparameters
     best_params = study.best_params
 
     # Use the best hyperparameters to train your final model
     # Use the best hyperparameters to train your final model
-    final_model = Survivalmodel(in_channels=x_train.shape[1],           # Number of input channels
-                                out_channels=1,                         # Number of output channels (1 for survival analysis)
-                                hidden_channels=[best_params[f"hidden_size_{i+1}"] for i in range(3)],  # Number of output channels of each hidden layer
-                                dropout=best_params["dropout"],         # Pass dropout directly
-                                l2_reg=best_params["l2_reg"])           # Pass l2_reg directly
+    final_model = Survivalmodel(
+        input_dim=int(train_dataset.X.shape[1]),  # Assuming x_train is your training data
+        dim_2=best_params["dim_2"],
+        dim_3=best_params["dim_3"],
+        drop=best_params["drop"],
+        l2_reg=best_params["l2_reg"]
+    )
 
-    trainer = pl.Trainer(max_epochs=max_epochs, log_every_n_steps=10, logger=final_model.mlflow_logger, accelerator='gpu', devices=1)
+    trainer = pl.Trainer(max_epochs=max_epochs, logger=final_model.mlflow_logger, accelerator='gpu', devices=1)
     trainer.fit(final_model,train_dataloaders=train_dataloader, val_dataloaders=test_dataloader)
-
-    # # Now lets try to actually train my model
-    # # Define parameters
-    # in_channels = x_train.shape[1]      # Number of input channels
-    # out_channels = 1                    # Number of output channels (1 for survival analysis)
-    # hidden_channels = [10, 10, 10]      # Number of output channels of each hidden layer (can be adjusted)
-    # dropout = 0.4                       # Hyperparameter, can be adjusted                
-    # l2_reg = 2                          # If this is not the case (l2_reg > 0), we need to make a regularisation class for the loss function to work! (see PyTorch model)
-    # max_epochs = 100
-
-
-    # model = Survivalmodel(in_channels=in_channels, out_channels=out_channels, hidden_channels=hidden_channels, dropout=dropout, l2_reg=l2_reg)
-    # model.to(device)
-    # trainer = pl.Trainer(max_epochs=max_epochs, log_every_n_steps=10, logger=model.mlflow_logger, accelerator='gpu', devices=1) # Do I need to put it on the GPU again? Or can I remove this?
-
-    # trainer.fit(model,train_dataloaders=train_dataloader, val_dataloaders=test_dataloader)
 

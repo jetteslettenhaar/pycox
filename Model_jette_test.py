@@ -44,11 +44,7 @@ torch.cuda.manual_seed(seed)
 # Step 2: Get data ready (turn into tensors)
 # Step 2a: Turn data into numbers --> my data is already in numbers since I used One Hot Encoding
 # Step 2b: Load the data
-'''
-X: covariates of the model
-e: whether the event (death or RFS) occurs? (1: occurs; 0: censored)
-t/y: the time of event e.
-'''
+
 class SurvivalDataset(Dataset):
     ''' The dataset class performs loading data from .h5 file. '''
     def __init__(self, is_train):
@@ -101,6 +97,7 @@ class SurvivalDataset(Dataset):
 
     def __len__(self):
         return self.X.shape[0]
+        
 # Create train dataset
 train_dataset = SurvivalDataset(is_train=True)
 test_dataset = SurvivalDataset(is_train=False)
