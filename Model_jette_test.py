@@ -49,71 +49,61 @@ X: covariates of the model
 e: whether the event (death or RFS) occurs? (1: occurs; 0: censored)
 t/y: the time of event e.
 '''
-filepath = 'my_models/support_train_test.h5'
-
-with h5py.File(filepath, 'r') as f:
-    data = {'train': {}, 'test': {}}
-    for datasets in f:
-        for array in f[datasets]:
-            data[datasets][array] = f[datasets][array][:]
-
-x_train = data['train']['x']
-t_train = data['train']['t']
-e_train = data['train']['e']
-
-x_test = data['test']['x']
-t_test = data['test']['t']
-e_test = data['test']['e']
-
-columns = ['x' +str(i) for i in range(x_train.shape[1])]
-train_df = (pd.DataFrame(x_train, columns=columns)
-                .assign(y=t_train)
-                .assign(e=e_train))
-test_df = (pd.DataFrame(x_test, columns=columns)
-               .assign(y=t_test)
-               .assign(e=e_test))
-
-# Maybe put this together, if I want a validation dataset --> Possible later
-print(train_df)
-print(test_df)
-
-def _normalize(df, cols):
-    ''' Performs min-max normalization on specified columns of DataFrame df.
-
-    :param df: (DataFrame) the DataFrame to be normalized
-    :param cols: (list) list of column names to be normalized
-    '''
-    for col in cols:
-        df[col] = (df[col] - df[col].min()) / (df[col].max() - df[col].min())
-
-# Columns to normalize
-norm_cols = ['x0', 'x1', 'x2', 'x3', 'x4', 'x5', 'x6', 'x7', 'x8', 'x9', 'x10', 'x11', 'x12', 'x13']
-
-# Normalize train and test data
-_normalize(train_df, norm_cols)
-_normalize(test_df, norm_cols)
-
-print(train_df)
-print(test_df)
-
-
-# # Step 2d: Split into train and test set, but we do need to seperate the data (covariates) and corresponding labels (event, duration)
-# I should also create a train and test dataloader and convert the data to a tensor to actually use it in the model 
 class SurvivalDataset(Dataset):
-    def __init__(self, dataframe):
-        # Needed to make a dataloader in PyTorch
-        self.dataframe = dataframe
-    def __len__(self):
-        # Needed to make a dataloader in PyTorch
-        return len(self.dataframe)
-    def __getitem__(self, idx):
-        x = torch.tensor(self.dataframe.iloc[idx, :-2].values, dtype=torch.float32).to(device)  # Exclude 'y' and 'e'
-        y = torch.tensor(self.dataframe.iloc[idx, -2:].values, dtype=torch.float32).to(device)  # 'y' and 'e'
-        return {'x': x, 'y': y}
+    ''' The dataset class performs loading data from .h5 file. '''
+    def __init__(self, is_train):
+        ''' Loading data from .h5 file based on (is_train).
 
-# Create custom datasets
-train_dataset = SurvivalDataset(train_df)
-test_dataset = SurvivalDataset(test_df)
+        :param is_train: (bool) which kind of data to be loaded?
+                is_train=True: loading train data
+                is_train=False: loading test data
+        '''
+        self.h5_file = 'my_models/support_train_test.h5'  # Default path to .h5 file
+        # loads data
+        self.X, self.e, self.y = self._read_h5_file(is_train)
+        # normalizes data
+        self._normalize()
+
+        print('=> load {} samples'.format(self.X.shape[0]))
+
+    def _read_h5_file(self, is_train):
+        ''' The function to parsing data from .h5 file.
+
+        :return X: (np.array) (n, m)
+            m is features dimension.
+        :return e: (np.array) (n, 1)
+            whether the event occurs? (1: occurs; 0: others)
+        :return y: (np.array) (n, 1)
+            the time of event e.
+        '''
+        split = 'train' if is_train else 'test'
+        with h5py.File(self.h5_file, 'r') as f:
+            X = f[split]['x'][()]
+            e = f[split]['e'][()].reshape(-1, 1)
+            y = f[split]['t'][()].reshape(-1, 1)
+        return X, e, y
+
+    def _normalize(self):
+        ''' Performs normalizing X data. '''
+        self.X = (self.X - self.X.min(axis=0)) / (self.X.max(axis=0) - self.X.min(axis=0))
+
+    def __getitem__(self, item):
+        ''' Performs constructing torch.Tensor object'''
+        # gets data with index of item
+        X_item = self.X[item] # (m)
+        e_item = self.e[item] # (1)
+        y_item = self.y[item] # (1)
+        # constructs torch.Tensor object
+        X_tensor = torch.from_numpy(X_item)
+        e_tensor = torch.from_numpy(e_item)
+        y_tensor = torch.from_numpy(y_item)
+        return {'x': X_tensor, 'y': y_tensor, 'e': e_tensor}
+
+    def __len__(self):
+        return self.X.shape[0]
+# Create train dataset
+train_dataset = SurvivalDataset(is_train=True)
+test_dataset = SurvivalDataset(is_train=False)
 
 print(train_dataset)
 print(test_dataset)
@@ -157,11 +147,13 @@ class Survivalmodel(pl.LightningModule):
         self.model.to(device)       # Move model to GPU
         self.l2_reg = l2_reg        # Is this necessary? Or is it sufficient to only define it as the parameter above
         self.regularization = Regularization(order=2, weight_decay=self.l2_reg)
-        self.mlflow_logger = MLFlowLogger(experiment_name="test_model_pytorch")
+        self.mlflow_logger = MLFlowLogger(experiment_name="Other_datasets", run_name="SUPPORT_REAL")
         mlflow.start_run()
         # We want to log everything (using MLflow)
         self.mlflow_logger.log_hyperparams({
-            'l2_reg': l2_reg
+            'l2_reg': l2_reg,
+            'drop': self.drop,
+            'dims': self.dims
         })
 
     def _build_network(self):
@@ -222,7 +214,7 @@ class Survivalmodel(pl.LightningModule):
         return concordance_index(y, risk_pred, e) # Risk_pred should have a negative sign --> done in training/validation step
 
     def training_step(self, batch, batch_idx):
-        x, y, e = batch['x'], batch['y'][:, 0], batch['y'][:, 1]
+        x, y, e = batch['x'], batch['y'], batch['e']
         risk_pred = self.forward(x)
         loss = self.loss_fn(risk_pred, y, e)
         c_index = self.c_index(-risk_pred, y, e)
@@ -232,7 +224,7 @@ class Survivalmodel(pl.LightningModule):
         return {'loss': loss, 'c_index': c_index, 'risk_pred': risk_pred, 'y': y, 'e': e}
 
     def validation_step(self, batch, batch_idx):
-        x, y, e = batch['x'], batch['y'][:, 0], batch['y'][:, 1]
+        x, y, e = batch['x'], batch['y'], batch['e']
         risk_pred = self.forward(x)
         loss = self.loss_fn(risk_pred, y, e)
         c_index = self.c_index(-risk_pred, y, e)
