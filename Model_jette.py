@@ -42,8 +42,7 @@ torch.manual_seed(seed)
 torch.cuda.manual_seed(seed)
 
 # -------------------------------------------------------------------------------------------------------------------------------------------
-# # Step 2d: Split into train and test set, but we do need to seperate the data (covariates) and corresponding labels (event, duration)
-# I should also create a train and test dataloader and convert the data to a tensor to actually use it in the model 
+# Now we need to preprocess the data with this SurvivalDataset class. Several options will be available, like setting a threshold and sampling
 
 class SurvivalDataset(Dataset):
     ''' The dataset class performs loading data from .h5 file. '''
@@ -149,11 +148,6 @@ class SurvivalDataset(Dataset):
         e_item = self.e[item] # (1)
         y_item = self.y[item] # (1)
 
-        # Print the tensors
-        print("X_tensor:", X_item)
-        print("e_tensor:", e_item)
-        print("y_tensor:", y_item)
-
         # constructs torch.Tensor object
         X_tensor = torch.from_numpy(X_item)
         e_tensor = torch.from_numpy(np.array([e_item]))
@@ -204,7 +198,7 @@ class Survivalmodel(pl.LightningModule):
         self.l2_reg = l2_reg
         self.regularization = Regularization(order=2, weight_decay=self.l2_reg)
 
-        self.mlflow_logger = MLFlowLogger(experiment_name="test_model", run_name="test_one")
+        self.mlflow_logger = MLFlowLogger(experiment_name="test_model", run_name="simple_model_all")
         mlflow.start_run()
         # We want to log everything (using MLflow)
         self.mlflow_logger.log_hyperparams({
@@ -232,10 +226,10 @@ class Survivalmodel(pl.LightningModule):
         return self.model(x.to(torch.float32))
 
     def configure_optimizers(self):
-        optimizer = torch.optim.SGD(self.parameters(), lr=0.001)        # Learning rate is hyperparameter!
+        optimizer = torch.optim.SGD(self.parameters(), lr=0.01)        # Learning rate is hyperparameter!
 
         def lr_lambda(epoch):
-            lr_decay_rate = 0.1                                         # Learning rate decay is a hyperparameter!
+            lr_decay_rate = 0.001                                       # Learning rate decay is a hyperparameter!
             return 1 / (1 + epoch * lr_decay_rate)                      # Inverse time decay function using epoch like in DeepSurv
 
         scheduler = torch.optim.lr_scheduler.LambdaLR(optimizer, lr_lambda=lr_lambda)
@@ -268,15 +262,6 @@ class Survivalmodel(pl.LightningModule):
             risk_pred = risk_pred.detach().cpu().numpy()
         if not isinstance(e, np.ndarray):
             e = e.detach().cpu().numpy()
-
-        # Print if there are NaN values
-        if np.isnan(y).any():
-            print("NaN values detected in y.")
-        if np.isnan(risk_pred).any():
-            print("NaN values detected in risk_pred.")
-            print(risk_pred)
-        if np.isnan(e).any():
-            print("NaN values detected in e.")
 
         return concordance_index(y, risk_pred, e) # Risk_pred should have a negative sign
 
@@ -320,7 +305,7 @@ def objective(trial: optuna.trial.Trial):
     # Hyperparameters to be optimized
     dim_2 = trial.suggest_int("dim_2", 1, 100)
     dim_3 = trial.suggest_int("dim_3", 1, 100)
-    drop = trial.suggest_float("drop", 0.1, 0.5)
+    drop = trial.suggest_float("drop", 0, 0.5)
     l2_reg = trial.suggest_float("l2_reg", 0, 20)
 
     # Define the actual model
@@ -345,6 +330,7 @@ if __name__ == "__main__":
 
     args = parser.parse_args()
     
+    # Lets create datasets and dataloaders
     # Create train dataset
     train_dataset = SurvivalDataset(is_train=True)
     test_dataset = SurvivalDataset(is_train=False)
@@ -355,10 +341,10 @@ if __name__ == "__main__":
 
 
 
-
+    # Lets actually run the study with hyperparameter optimization
     # Create an Optuna study and optimize hyperparameters
     study = optuna.create_study(direction="maximize")
-    study.optimize(objective, n_trials=10)
+    study.optimize(objective, n_trials=25)
 
     # Get the best hyperparameters
     best_params = study.best_params
