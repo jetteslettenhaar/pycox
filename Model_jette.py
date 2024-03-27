@@ -59,6 +59,8 @@ class SurvivalDataset(Dataset):
         self.h5_file = 'my_models/simple_model_all.h5'  # Default path to .h5 file
         # loads data
         self.X, self.e, self.y = self._read_h5_file(is_train)
+        # Remove NaN values
+        self._drop_na()
         # normalizes data
         self._normalize()
         # apply threshold
@@ -68,6 +70,17 @@ class SurvivalDataset(Dataset):
             self._balance_classes(sampling)
 
         print('=> load {} samples'.format(self.X.shape[0]))
+
+    def _drop_na(self):
+        ''' Drops rows with NaN values '''
+        # Combine X, e, y into a DataFrame
+        df = pd.DataFrame(np.concatenate([self.X, self.e, self.y], axis=1), columns=[f'x{i}' for i in range(self.X.shape[1])] + ['e', 'y'])
+        # Drop rows with NaN values
+        df = df.dropna()
+        # Assign values back to X, e, y
+        self.X = df[df.columns[:-2]].values  # Exclude 'e' and 'y' columns
+        self.e = df['e'].values
+        self.y = df['y'].values
 
     def _apply_threshold(self, threshold_value):
         ''' Filters out samples with 'y' values above the threshold value '''
@@ -118,7 +131,16 @@ class SurvivalDataset(Dataset):
 
     def _normalize(self):
         ''' Performs normalizing X data. '''
-        self.X = (self.X - self.X.min(axis=0)) / (self.X.max(axis=0) - self.X.min(axis=0))
+        # Calculate mean and standard deviation along each column
+        mean_values = self.X.mean(axis=0)
+        std_values = self.X.std(axis=0)
+
+        # Check for zero standard deviation and replace with epsilon
+        epsilon = 1e-10  # Small value to avoid division by zero
+        std_values[std_values == 0] = epsilon
+
+        # Perform z-score normalization
+        self.X = (self.X - mean_values) / std_values
 
     def __getitem__(self, item):
         ''' Performs constructing torch.Tensor object'''
@@ -126,10 +148,16 @@ class SurvivalDataset(Dataset):
         X_item = self.X[item] # (m)
         e_item = self.e[item] # (1)
         y_item = self.y[item] # (1)
+
+        # Print the tensors
+        print("X_tensor:", X_item)
+        print("e_tensor:", e_item)
+        print("y_tensor:", y_item)
+
         # constructs torch.Tensor object
         X_tensor = torch.from_numpy(X_item)
-        e_tensor = torch.from_numpy(e_item)
-        y_tensor = torch.from_numpy(y_item)
+        e_tensor = torch.from_numpy(np.array([e_item]))
+        y_tensor = torch.from_numpy(np.array([y_item]))
         return {'x': X_tensor, 'y': y_tensor, 'e': e_tensor}
 
     def __len__(self):
@@ -241,6 +269,15 @@ class Survivalmodel(pl.LightningModule):
         if not isinstance(e, np.ndarray):
             e = e.detach().cpu().numpy()
 
+        # Print if there are NaN values
+        if np.isnan(y).any():
+            print("NaN values detected in y.")
+        if np.isnan(risk_pred).any():
+            print("NaN values detected in risk_pred.")
+            print(risk_pred)
+        if np.isnan(e).any():
+            print("NaN values detected in e.")
+
         return concordance_index(y, risk_pred, e) # Risk_pred should have a negative sign
 
     def training_step(self, batch, batch_idx):
@@ -275,8 +312,6 @@ class Survivalmodel(pl.LightningModule):
 
     def on_train_end(self):
         print(f'Best C-Index: {self.best_c_index:.4f}')
-        # Save the best model
-        torch.save({'model': self.best_model_state}, 'best_model.pth')
         mlflow.end_run()
 
 max_epochs = 300
@@ -313,10 +348,6 @@ if __name__ == "__main__":
     # Create train dataset
     train_dataset = SurvivalDataset(is_train=True)
     test_dataset = SurvivalDataset(is_train=False)
-
-    print(train_dataset)
-    print(test_dataset)
-    print(train_dataset.X.shape[1])
 
     # Create custom dataloaders
     train_dataloader = DataLoader(train_dataset, batch_size=len(train_dataset), shuffle=True)
