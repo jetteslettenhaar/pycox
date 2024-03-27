@@ -197,8 +197,10 @@ class Survivalmodel(pl.LightningModule):
         self.model.to(device)
         self.l2_reg = l2_reg
         self.regularization = Regularization(order=2, weight_decay=self.l2_reg)
+        self.lr = 0.0001
+        self.lr_decay_rate = 0.005
 
-        self.mlflow_logger = MLFlowLogger(experiment_name="test_model", run_name="simple_model_all")
+        self.mlflow_logger = MLFlowLogger(experiment_name="test_model", run_name="simple_model_all_lr0_0001")
         mlflow.start_run()
         # We want to log everything (using MLflow)
         self.mlflow_logger.log_hyperparams({
@@ -206,7 +208,9 @@ class Survivalmodel(pl.LightningModule):
             'drop': self.drop,
             'input_dim': self.input_dim,
             'dim_2': self.dim_2,
-            'dim_3': self.dim_3
+            'dim_3': self.dim_3,
+            'lr': self.lr,
+            'lr_decay_rate': self.lr_decay_rate
         })
 
     def _build_network(self):
@@ -226,10 +230,10 @@ class Survivalmodel(pl.LightningModule):
         return self.model(x.to(torch.float32))
 
     def configure_optimizers(self):
-        optimizer = torch.optim.SGD(self.parameters(), lr=0.01)        # Learning rate is hyperparameter!
+        optimizer = torch.optim.SGD(self.parameters(), lr=self.lr)        # Learning rate is hyperparameter! (normal is 0.001)
 
         def lr_lambda(epoch):
-            lr_decay_rate = 0.001                                       # Learning rate decay is a hyperparameter!
+            lr_decay_rate = self.lr_decay_rate                          # Learning rate decay is a hyperparameter! (normal is 0.1)
             return 1 / (1 + epoch * lr_decay_rate)                      # Inverse time decay function using epoch like in DeepSurv
 
         scheduler = torch.optim.lr_scheduler.LambdaLR(optimizer, lr_lambda=lr_lambda)
@@ -299,7 +303,7 @@ class Survivalmodel(pl.LightningModule):
         print(f'Best C-Index: {self.best_c_index:.4f}')
         mlflow.end_run()
 
-max_epochs = 300
+max_epochs = 500
 # Setup objective function for Optuna
 def objective(trial: optuna.trial.Trial):
     # Hyperparameters to be optimized
@@ -344,7 +348,7 @@ if __name__ == "__main__":
     # Lets actually run the study with hyperparameter optimization
     # Create an Optuna study and optimize hyperparameters
     study = optuna.create_study(direction="maximize")
-    study.optimize(objective, n_trials=25)
+    study.optimize(objective, n_trials=10)
 
     # Get the best hyperparameters
     best_params = study.best_params
