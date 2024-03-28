@@ -55,7 +55,7 @@ class SurvivalDataset(Dataset):
         :param threshold_value: (int) threshold value to filter out samples with 'y' values above this threshold
         :param sampling: (str) sampling strategy: "upsampling" or "downsampling"
         '''
-        self.h5_file = 'my_models/simple_model_all.h5'  # Default path to .h5 file
+        self.h5_file = 'my_models/simple_model_all_RFS.h5'  # Default path to .h5 file
         # loads data
         self.X, self.e, self.y = self._read_h5_file(is_train)
         # Remove NaN values
@@ -200,7 +200,7 @@ class Survivalmodel(pl.LightningModule):
         self.lr = 0.0001
         self.lr_decay_rate = 0.005
 
-        self.mlflow_logger = MLFlowLogger(experiment_name="test_model", run_name="simple_model_all_lr0_0001")
+        self.mlflow_logger = MLFlowLogger(experiment_name="test_model_all", run_name="simple_model_OPT_RFS")
         mlflow.start_run()
         # We want to log everything (using MLflow)
         self.mlflow_logger.log_hyperparams({
@@ -303,14 +303,14 @@ class Survivalmodel(pl.LightningModule):
         print(f'Best C-Index: {self.best_c_index:.4f}')
         mlflow.end_run()
 
-max_epochs = 500
+max_epochs = 800
 # Setup objective function for Optuna
 def objective(trial: optuna.trial.Trial):
     # Hyperparameters to be optimized
-    dim_2 = trial.suggest_int("dim_2", 1, 100)
-    dim_3 = trial.suggest_int("dim_3", 1, 100)
-    drop = trial.suggest_float("drop", 0, 0.5)
-    l2_reg = trial.suggest_float("l2_reg", 0, 20)
+    dim_2 = trial.suggest_int("dim_2", 61, 62)
+    dim_3 = trial.suggest_int("dim_3", 59, 60)
+    drop = trial.suggest_float("drop", 0, 0.004)
+    l2_reg = trial.suggest_float("l2_reg", 16, 17)
 
     # Define the actual model
     model = Survivalmodel(input_dim=int(train_dataset.X.shape[1]), dim_2=dim_2, dim_3=dim_3, drop=drop, l2_reg=l2_reg)
@@ -348,7 +348,7 @@ if __name__ == "__main__":
     # Lets actually run the study with hyperparameter optimization
     # Create an Optuna study and optimize hyperparameters
     study = optuna.create_study(direction="maximize")
-    study.optimize(objective, n_trials=10)
+    study.optimize(objective, n_trials=5)
 
     # Get the best hyperparameters
     best_params = study.best_params
