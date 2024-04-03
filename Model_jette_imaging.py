@@ -28,6 +28,8 @@ from monai.transforms import (
     Spacingd,
 )
 
+import matplotlib.pyplot as plt
+
 # Import CSV file to get the labels of my images (pickle does not work with this (old) Python version)
 labels = pd.read_csv('my_models/outcome_model_imaging.csv', delimiter=',')
 labels = labels.drop(columns=['Censored_death', 'Censored_RFS'])
@@ -89,6 +91,56 @@ for patient_dict in patient_info_list:
     print(patient_dict)
 
 '''
+We can run this if we would like to get the spacing and size (but we already have a histogram, so only run if data changes)
+'''
+
+# shapes = []
+# spacings = []
+# # Assuming `patient_info_list` contains the patient information dictionaries
+# for patient_info in patient_info_list:
+#     # Load the image
+#     image_path = patient_info['img']
+#     image_data = nib.load(image_path)
+#     image = nib.load(image_path).get_fdata()
+
+#     # Get the shape
+#     image_shape = image.shape
+#     shapes.append(image_shape)
+#     # Get the voxel spacing
+#     voxel_spacing = np.array(image_data.header.get_zooms())
+#     spacings.append(voxel_spacing)
+
+# # Print the lists of shapes and spacings
+# print("List of image shapes:", shapes)
+# print("List of voxel spacings:", spacings)
+
+# # Plot histograms of image shapes
+# plt.figure(figsize=(12, 6))
+# plt.subplot(1, 2, 1)
+# plt.hist([shape[0] for shape in shapes], bins=20, color='blue', alpha=0.7, label='Width')
+# plt.hist([shape[1] for shape in shapes], bins=20, color='green', alpha=0.7, label='Height')
+# plt.hist([shape[2] for shape in shapes], bins=20, color='red', alpha=0.7, label='Depth')
+# plt.xlabel('Size')
+# plt.ylabel('Frequency')
+# plt.title('Histogram of Image Shapes')
+# plt.legend()
+
+# # Plot histograms of voxel spacings
+# plt.subplot(1, 2, 2)
+# plt.hist([spacing[0] for spacing in spacings], bins=20, color='blue', alpha=0.7, label='X')
+# plt.hist([spacing[1] for spacing in spacings], bins=20, color='green', alpha=0.7, label='Y')
+# plt.hist([spacing[2] for spacing in spacings], bins=20, color='red', alpha=0.7, label='Z')
+# plt.xlabel('Voxel Spacing')
+# plt.ylabel('Frequency')
+# plt.title('Histogram of Voxel Spacings')
+# plt.legend()
+
+# plt.tight_layout()
+# plt.show()
+# plt.savefig('/trinity/home/r098372/pycox/figures/histograms.png')
+
+
+'''
 The data has been prepared in a dictionary! 
 Now we need to actually make the model which contains 'prepare_data' function to actually load the dictionary.
 '''
@@ -100,6 +152,8 @@ device = "cuda" if torch.cuda.is_available() else "cpu"
 seed = 42
 torch.manual_seed(seed)
 torch.cuda.manual_seed(seed)
+
+max_image_size = []     # Determine this after spacing has changed, first check whether spacing is okay
 
 class SurvivalImaging(pl.LightningModule):
     def __init__(self):
@@ -125,25 +179,51 @@ class SurvivalImaging(pl.LightningModule):
         train_transforms = Compose(
             [
                 LoadImaged(keys=['img']),
-                EnsureChannelFirstd(keys=['img'])
-                # Lets start without a spacing transform since we do not know the spacing yet
-                # Spacingd(
-                #     keys=['img'],
-                #     pixdim=(1.0, 1.0, 1.0),
-                #     mode=('bilinear'),
-                # )
+                EnsureChannelFirstd(keys=['img']),
+                # Lets start without a spacing transform (we do [1, 1, 1], since this is the smallest spacing approximately)
+                Spacingd(
+                    keys=['img'],
+                    pixdim=(1.0, 1.0, 1.0), # Mediaan in alle richtingen 
+                    mode=('bilinear'),
+                ),
+                Pad(
+                    keys=["img"],
+                    spatial_size=(max_image_size, max_image_size, max_image_size),
+                    method="minimum",
+                ),
+                ScaleIntensityRanged( # Dit even testen in een viewer en kijken wat er gebeurt als je clipt
+                    keys=["image"],
+                    a_min=-57,
+                    a_max=164,
+                    b_min=0.0,
+                    b_max=1.0,
+                    clip=True,
+                ),
             ]
         )
         val_transforms = Compose(
             [
                 LoadImaged(keys=['img']),
-                EnsureChannelFirstd(keys=['img'])
-                # Lets start without a spacing transform since we do not know the spacing yet
-                # Spacingd(
-                #     keys=['img'],
-                #     pixdim=(1.0, 1.0, 1.0),
-                #     mode=('bilinear'),
-                # )
+                EnsureChannelFirstd(keys=['img']),
+                # Lets start without a spacing transform (we do [1, 1, 1], since this is the smallest spacing approximately)
+                Spacingd(
+                    keys=['img'],
+                    pixdim=(1.0, 1.0, 1.0),
+                    mode=('bilinear'),
+                ),
+                Pad(
+                    keys=["img"],
+                    spatial_size=(max_image_size, max_image_size, max_image_size),
+                    method="minimum",
+                ),
+                ScaleIntensityRanged(
+                    keys=["image"],
+                    a_min=-57,
+                    a_max=164,
+                    b_min=0.0,
+                    b_max=1.0,
+                    clip=True,
+                ),
             ]
         )
 
@@ -153,29 +233,6 @@ class SurvivalImaging(pl.LightningModule):
         # Normalisatie van de intensiteit (Monai, scale intensity range d)
 
         self.val_ds = Dataset(data = val_files, transform = val_transforms)
-
-
-shapes = []
-spacings = []
-# Assuming `patient_info_list` contains the patient information dictionaries
-for patient_info in patient_info_list:
-    # Load the image
-    image_path = patient_info['img']
-    image_data = nib.load(image_path)
-    image = nib.load(image_path).get_fdata()
-
-    # Get the shape
-    image_shape = image.shape
-    shapes.append(image_shape)
-    # Get the voxel spacing
-    voxel_spacing = np.array(image_data.header.get_zooms())
-    spacings.append(voxel_spacing)
-
-# Print the lists of shapes and spacings
-print("List of image shapes:", shapes)
-print("List of voxel spacings:", spacings)
-
-
 
 
     # def train_dataloader(self):

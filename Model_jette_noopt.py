@@ -1,5 +1,3 @@
-# Step 1: Import all important modules
-
 import ctypes
 libgcc_s = ctypes.CDLL('libgcc_s.so.1')
 
@@ -27,9 +25,6 @@ from monai.networks.nets import FullyConnectedNet
 
 import mlflow
 from pytorch_lightning.loggers import MLFlowLogger
-
-import optuna
-
 
 # --------------------------------------------------------------------------------------------------------
 
@@ -304,27 +299,6 @@ class Survivalmodel(pl.LightningModule):
         mlflow.end_run()
 
 max_epochs = 800
-# Setup objective function for Optuna
-def objective(trial: optuna.trial.Trial):
-    # Hyperparameters to be optimized
-    dim_2 = trial.suggest_int("dim_2", 1, 100)
-    dim_3 = trial.suggest_int("dim_3", 1, 100)
-    drop = trial.suggest_float("drop", 0, 0.5)
-    l2_reg = trial.suggest_float("l2_reg", 0, 20)
-
-    # Define the actual model
-    model = Survivalmodel(input_dim=int(train_dataset.X.shape[1]), dim_2=dim_2, dim_3=dim_3, drop=drop, l2_reg=l2_reg)
-    model.to(device)
-    trainer = pl.Trainer(max_epochs=max_epochs, logger=model.mlflow_logger, accelerator='gpu', devices=1)
-    trainer.fit(model,train_dataloaders=train_dataloader, val_dataloaders=test_dataloader)
-
-    # Get the validation C-index logged by LightningModule
-    c_index_value_val = trainer.callback_metrics['val_c_index_objective']
-
-    return c_index_value_val
-
-
-
 
 if __name__ == "__main__":
     parser = argparse.ArgumentParser(
@@ -343,26 +317,15 @@ if __name__ == "__main__":
     train_dataloader = DataLoader(train_dataset, batch_size=len(train_dataset), shuffle=True)
     test_dataloader = DataLoader(test_dataset, batch_size=len(test_dataset))
 
+    print(torch.cuda.is_available())
 
+    # Set hyperparameters
+    dim_2 = 6  # Fill in desired value for dim_2
+    dim_3 = 91  # Fill in desired value for dim_3
+    dropout = 0.16121370836233162  # Fill in desired value for dropout
+    l2 = 18.16864371027304  # Fill in desired value for L2 regularization
 
-    # Lets actually run the study with hyperparameter optimization
-    # Create an Optuna study and optimize hyperparameters
-    study = optuna.create_study(direction="maximize")
-    study.optimize(objective, n_trials=5)
-
-    # Get the best hyperparameters
-    best_params = study.best_params
-
-    # Use the best hyperparameters to train your final model
-    # Use the best hyperparameters to train your final model
-    final_model = Survivalmodel(
-        input_dim=int(train_dataset.X.shape[1]),  # Assuming x_train is your training data
-        dim_2=best_params["dim_2"],
-        dim_3=best_params["dim_3"],
-        drop=best_params["drop"],
-        l2_reg=best_params["l2_reg"]
-    )
-
-    trainer = pl.Trainer(max_epochs=max_epochs, logger=final_model.mlflow_logger, accelerator='gpu', devices=1)
-    trainer.fit(final_model,train_dataloaders=train_dataloader, val_dataloaders=test_dataloader)
-
+    # Initialize and train the model
+    model = Survivalmodel(input_dim=int(train_dataset.X.shape[1]), dim_2=dim_2, dim_3=dim_3, drop=dropout, l2_reg=l2)
+    trainer = pl.Trainer(max_epochs=max_epochs, logger=model.mlflow_logger, accelerator='gpu', devices=1)
+    trainer.fit(model, train_dataloader, test_dataloader)
