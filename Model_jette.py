@@ -200,7 +200,7 @@ class Survivalmodel(pl.LightningModule):
         self.lr = 0.0001
         self.lr_decay_rate = 0.005
 
-        self.mlflow_logger = MLFlowLogger(experiment_name="try_parameters", run_name="simple_model_all")
+        self.mlflow_logger = MLFlowLogger(experiment_name="change_model_eval", run_name="simple_model_all")
         mlflow.start_run()
         # We want to log everything (using MLflow)
         self.mlflow_logger.log_hyperparams({
@@ -287,12 +287,12 @@ class Survivalmodel(pl.LightningModule):
 
         self.mlflow_logger.log_metrics({'val_c_index': c_index})
         self.mlflow_logger.log_metrics({'val_loss': loss.item()})
-        self.log('val_c_index_objective', c_index)
+        self.log('val_c_index_objective', c_index, on_epoch=True)
 
-        # Check if the current c-index is better than the previous best
-        if c_index > self.best_c_index:
-            self.best_c_index = c_index
-            self.best_model_state = self.model.state_dict().copy()  # Save the model state
+        # # Check if the current c-index is better than the previous best
+        # if c_index > self.best_c_index:
+        #     self.best_c_index = c_index
+        #     self.best_model_state = self.model.state_dict().copy()  # Save the model state
 
         return {'loss': loss, 'c_index': c_index, 'risk_pred': risk_pred, 'y': y, 'e': e}
 
@@ -318,10 +318,17 @@ def objective(trial: optuna.trial.Trial):
     trainer = pl.Trainer(max_epochs=max_epochs, logger=model.mlflow_logger, accelerator='gpu', devices=1)
     trainer.fit(model,train_dataloaders=train_dataloader, val_dataloaders=test_dataloader)
 
-    # Get the validation C-index logged by LightningModule
-    c_index_value_val = trainer.callback_metrics['val_c_index_objective']
+    # Extract validation C-index values for the final 10 epochs
+    val_c_indices = []
+    for epoch in range(max_epochs - 10, max_epochs):
+        # Get the validation C-index logged by LightningModule
+        val_c_index_value = trainer.callback_metrics['val_c_index_objective']
+        val_c_indices.append(val_c_index_value)
 
-    return c_index_value_val
+    # Calculate the average of the final 10 validation C-indices
+    avg_val_c_index = np.mean(val_c_indices)
+
+    return avg_val_c_index
 
 
 
@@ -348,7 +355,7 @@ if __name__ == "__main__":
     # Lets actually run the study with hyperparameter optimization
     # Create an Optuna study and optimize hyperparameters
     study = optuna.create_study(direction="maximize")
-    study.optimize(objective, n_trials=5)
+    study.optimize(objective, n_trials=10)
 
     # Get the best hyperparameters
     best_params = study.best_params
