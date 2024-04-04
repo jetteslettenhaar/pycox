@@ -290,12 +290,21 @@ class Survivalmodel(pl.LightningModule):
         self.mlflow_logger.log_metrics({'val_loss': loss.item()})
         self.log('val_c_index_objective', c_index, on_epoch=True)
 
-        # # Check if the current c-index is better than the previous best
-        # if c_index > self.best_c_index:
-        #     self.best_c_index = c_index
-        #     self.best_model_state = self.model.state_dict().copy()  # Save the model state
-
         return {'loss': loss, 'c_index': c_index, 'risk_pred': risk_pred, 'y': y, 'e': e}
+    
+    def test_step(self, batch, batch_idx):
+        x, y, e = batch['x'], batch['y'], batch['e']
+        risk_pred = self.forward(x)
+        loss = self.loss_fn(risk_pred, y, e)
+        c_index = self.c_index(-risk_pred, y, e)
+
+        # Log metrics for evaluation purposes
+        self.log('test_c_index', c_index)
+        self.log('test_loss', loss.item())
+        self.mlflow_logger.log_metrics({'test_c_index': c_index})
+        self.mlflow_logger.log_metrics({'test_loss': loss.item()})
+        
+        return {'test_loss': loss, 'test_c_index': c_index}
 
     def on_train_start(self):
         self.best_c_index = 0.0  # Initialize the best c-index to 0
@@ -400,7 +409,7 @@ if __name__ == "__main__":
             trainer.fit(final_model, train_dataloaders=train_dataloader_inner, val_dataloaders=test_dataloader_inner)
 
             # Evaluate the final model on the outer fold test set
-            test_result = trainer.test(test_dataloaders=test_dataloader_outer)
-            print(f"Test C-index for Outer Fold {fold_idx + 1}: {test_result[0]['val_c_index_objective']}")
+            test_result = trainer.test(dataloaders=test_dataloader_outer)
+            print(f"Test C-index for Outer Fold {fold_idx + 1}: {test_result[0]['test_c_index']}")
 
 
