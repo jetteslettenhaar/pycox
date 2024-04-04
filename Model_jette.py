@@ -29,6 +29,7 @@ import mlflow
 from pytorch_lightning.loggers import MLFlowLogger
 
 import optuna
+from sklearn.model_selection import KFold
 
 
 # --------------------------------------------------------------------------------------------------------
@@ -303,35 +304,6 @@ class Survivalmodel(pl.LightningModule):
         print(f'Best C-Index: {self.best_c_index:.4f}')
         mlflow.end_run()
 
-max_epochs = 800
-# Setup objective function for Optuna
-def objective(trial: optuna.trial.Trial):
-    # Hyperparameters to be optimized
-    dim_2 = trial.suggest_int("dim_2", 1, 100)
-    dim_3 = trial.suggest_int("dim_3", 1, 100)
-    drop = trial.suggest_float("drop", 0, 0.5)
-    l2_reg = trial.suggest_float("l2_reg", 0, 20)
-
-    # Define the actual model
-    model = Survivalmodel(input_dim=int(train_dataset.X.shape[1]), dim_2=dim_2, dim_3=dim_3, drop=drop, l2_reg=l2_reg)
-    model.to(device)
-    trainer = pl.Trainer(max_epochs=max_epochs, logger=model.mlflow_logger, accelerator='gpu', devices=1)
-    trainer.fit(model,train_dataloaders=train_dataloader, val_dataloaders=test_dataloader)
-
-    # Extract validation C-index values for the final 10 epochs
-    val_c_indices = []
-    for epoch in range(max_epochs - 10, max_epochs):
-        # Get the validation C-index logged by LightningModule
-        val_c_index_value = trainer.callback_metrics['val_c_index_objective']
-        val_c_indices.append(val_c_index_value)
-
-    # Calculate the average of the final 10 validation C-indices
-    avg_val_c_index = np.mean(val_c_indices)
-
-    return avg_val_c_index
-
-
-
 
 if __name__ == "__main__":
     parser = argparse.ArgumentParser(
@@ -345,31 +317,90 @@ if __name__ == "__main__":
     # Create train dataset
     train_dataset = SurvivalDataset(is_train=True)
     test_dataset = SurvivalDataset(is_train=False)
-
-    # Create custom dataloaders
-    train_dataloader = DataLoader(train_dataset, batch_size=len(train_dataset), shuffle=True)
-    test_dataloader = DataLoader(test_dataset, batch_size=len(test_dataset))
+    combined_dataset = torch.utils.data.ConcatDataset([train_dataset, test_dataset])
 
 
+    # Define the number  of folds for outer and inner cross-validation
+    outer_k_folds = 5
+    inner_k_folds = 3
+    max_epochs = 800
 
-    # Lets actually run the study with hyperparameter optimization
-    # Create an Optuna study and optimize hyperparameters
-    study = optuna.create_study(direction="maximize")
-    study.optimize(objective, n_trials=10)
+    # Define outer K-fold cross-validation
+    outer_kfold = KFold(n_splits=outer_k_folds, shuffle=True)
 
-    # Get the best hyperparameters
-    best_params = study.best_params
+    # Outer cross-validation loop
+    for fold_idx, (train_indices, test_indices) in enumerate(outer_kfold.split(combined_dataset)):
+        print(f"Outer Fold: {fold_idx + 1}/{outer_k_folds}")
 
-    # Use the best hyperparameters to train your final model
-    # Use the best hyperparameters to train your final model
-    final_model = Survivalmodel(
-        input_dim=int(train_dataset.X.shape[1]),  # Assuming x_train is your training data
-        dim_2=best_params["dim_2"],
-        dim_3=best_params["dim_3"],
-        drop=best_params["drop"],
-        l2_reg=best_params["l2_reg"]
-    )
+        # Split data into train and test for outer fold
+        train_data_outer = torch.utils.data.Subset(combined_dataset, train_indices)
+        test_data_outer = torch.utils.data.Subset(combined_dataset, test_indices)
 
-    trainer = pl.Trainer(max_epochs=max_epochs, logger=final_model.mlflow_logger, accelerator='gpu', devices=1)
-    trainer.fit(final_model,train_dataloaders=train_dataloader, val_dataloaders=test_dataloader)
+        # Create custom dataloaders for outer fold
+        train_dataloader_outer = DataLoader(train_data_outer, batch_size=len(train_data_outer), shuffle=True)
+        test_dataloader_outer = DataLoader(test_data_outer, batch_size=len(test_data_outer))
+
+        # Create inner K-fold cross-validation
+        inner_kfold = KFold(n_splits=inner_k_folds, shuffle=True)
+
+        for inner_fold_idx, (train_indices_inner, test_indices_inner) in enumerate(inner_kfold.split(train_data_outer)):
+            print(f"\tInner Fold: {inner_fold_idx + 1}/{inner_k_folds}")
+
+            # Split data into train and test for inner fold
+            train_data_inner = torch.utils.data.Subset(train_data_outer, train_indices_inner)
+            test_data_inner = torch.utils.data.Subset(train_data_outer, test_indices_inner)
+
+            # Create custom dataloaders for inner fold
+            train_dataloader_inner = DataLoader(train_data_inner, batch_size=len(train_data_inner), shuffle=True)
+            test_dataloader_inner = DataLoader(test_data_inner, batch_size=len(test_data_inner))
+        
+            # Setup objective function for Optuna
+            def objective(trial: optuna.trial.Trial):
+                # Hyperparameters to be optimized
+                dim_2 = trial.suggest_int("dim_2", 1, 100)
+                dim_3 = trial.suggest_int("dim_3", 1, 100)
+                drop = trial.suggest_float("drop", 0, 0.5)
+                l2_reg = trial.suggest_float("l2_reg", 0, 20)
+
+                # Define the actual model
+                model = Survivalmodel(input_dim=int(train_dataset.X.shape[1]), dim_2=dim_2, dim_3=dim_3, drop=drop, l2_reg=l2_reg)
+                model.to(device)
+                trainer = pl.Trainer(max_epochs=max_epochs, logger=model.mlflow_logger, accelerator='gpu', devices=1)
+                trainer.fit(model, train_dataloaders=train_dataloader_inner, val_dataloaders=test_dataloader_inner)
+
+                # Extract validation C-index values for the final 10 epochs
+                val_c_indices = []
+                for epoch in range(max_epochs - 10, max_epochs):
+                    # Get the validation C-index logged by LightningModule
+                    val_c_index_value = trainer.callback_metrics['val_c_index_objective']
+                    val_c_indices.append(val_c_index_value)
+
+                # Calculate the average of the final 10 validation C-indices
+                avg_val_c_index = np.mean(val_c_indices)
+
+                return avg_val_c_index 
+
+            # Create an Optuna study and optimize hyperparameters
+            study = optuna.create_study(direction="maximize")
+            study.optimize(objective, n_trials=3)
+
+            # Get the best hyperparameters
+            best_params = study.best_params
+
+            # Use the best hyperparameters to train your final model for this fold
+            final_model = Survivalmodel(
+                input_dim=int(train_dataset.X.shape[1]),
+                dim_2=best_params["dim_2"],
+                dim_3=best_params["dim_3"],
+                drop=best_params["drop"],
+                l2_reg=best_params["l2_reg"]
+            )
+
+            trainer = pl.Trainer(max_epochs=max_epochs, logger=final_model.mlflow_logger, accelerator='gpu', devices=1)
+            trainer.fit(final_model, train_dataloaders=train_dataloader_inner, val_dataloaders=test_dataloader_inner)
+
+            # Evaluate the final model on the outer fold test set
+            test_result = trainer.test(test_dataloaders=test_dataloader_outer)
+            print(f"Test C-index for Outer Fold {fold_idx + 1}: {test_result[0]['val_c_index_objective']}")
+
 

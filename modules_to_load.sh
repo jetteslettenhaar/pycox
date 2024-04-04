@@ -1,7 +1,8 @@
 #!/bin/bash
 #SBATCH --ntasks=1     
 #SBATCH --mem=14G      
-#SBATCH --gres=gpu:1   
+#SBATCH --gres=gpu:1  
+#SBATCH --nodelist=gpu005 
 #SBATCH -p short       
 #SBATCH -t 04:00:00
 #SBATCH -o /trinity/home/r098372/pycox/output/out_%j.log
