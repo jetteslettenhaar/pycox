@@ -329,7 +329,7 @@ if __name__ == "__main__":
     combined_dataset = torch.utils.data.ConcatDataset([train_dataset, test_dataset])
 
 
-    # Define the number  of folds for outer and inner cross-validation
+    # Define the number of folds for outer and inner cross-validation
     outer_k_folds = 5
     inner_k_folds = 3
     max_epochs = 800
@@ -349,67 +349,74 @@ if __name__ == "__main__":
         train_dataloader_outer = DataLoader(train_data_outer, batch_size=len(train_data_outer), shuffle=True)
         test_dataloader_outer = DataLoader(test_data_outer, batch_size=len(test_data_outer))
 
+        # List to store validation C-indices for all inner folds
+        val_c_indices_all_folds = []
+
         # Create inner K-fold cross-validation
         inner_kfold = KFold(n_splits=inner_k_folds, shuffle=True)
 
-        for inner_fold_idx, (train_indices_inner, test_indices_inner) in enumerate(inner_kfold.split(train_data_outer)):
-            print(f"\tInner Fold: {inner_fold_idx + 1}/{inner_k_folds}")
+        # Define hyperparameters to be optimized
+        def objective(trial: optuna.trial.Trial):
+            # Hyperparameters to be optimized
+            dim_2 = trial.suggest_int("dim_2", 1, 100)
+            dim_3 = trial.suggest_int("dim_3", 1, 100)
+            drop = trial.suggest_float("drop", 0, 0.5)
+            l2_reg = trial.suggest_float("l2_reg", 0, 20)
 
-            # Split data into train and test for inner fold
-            train_data_inner = torch.utils.data.Subset(train_data_outer, train_indices_inner)
-            test_data_inner = torch.utils.data.Subset(train_data_outer, test_indices_inner)
+            # List to store validation C-indices for this inner fold
+            val_c_indices_inner_fold = []
 
             # Create custom dataloaders for inner fold
-            train_dataloader_inner = DataLoader(train_data_inner, batch_size=len(train_data_inner), shuffle=True)
-            test_dataloader_inner = DataLoader(test_data_inner, batch_size=len(test_data_inner))
-        
-            # Setup objective function for Optuna
-            def objective(trial: optuna.trial.Trial):
-                # Hyperparameters to be optimized
-                dim_2 = trial.suggest_int("dim_2", 1, 100)
-                dim_3 = trial.suggest_int("dim_3", 1, 100)
-                drop = trial.suggest_float("drop", 0, 0.5)
-                l2_reg = trial.suggest_float("l2_reg", 0, 20)
+            train_dataloader_inner = DataLoader(train_data_outer, batch_size=len(train_data_outer), shuffle=True)
+            test_dataloader_inner = DataLoader(test_data_outer, batch_size=len(train_data_outer))
 
+            # Inner cross-validation loop
+            for inner_fold_idx, (train_indices_inner, test_indices_inner) in enumerate(inner_kfold.split(train_data_outer)):
+                print(f"\tInner Fold: {inner_fold_idx + 1}/{inner_k_folds}")
+
+                # Split data into train and test for inner fold
+                train_data_inner = torch.utils.data.Subset(train_data_outer, train_indices_inner)
+                test_data_inner = torch.utils.data.Subset(train_data_outer, test_indices_inner)
+
+                # Create custom dataloaders for inner fold
+                train_dataloader_inner = DataLoader(train_data_inner, batch_size=len(train_data_inner), shuffle=True)
+                test_dataloader_inner = DataLoader(test_data_inner, batch_size=len(train_data_inner))
+            
                 # Define the actual model
                 model = Survivalmodel(input_dim=int(train_dataset.X.shape[1]), dim_2=dim_2, dim_3=dim_3, drop=drop, l2_reg=l2_reg)
                 model.to(device)
                 trainer = pl.Trainer(max_epochs=max_epochs, logger=model.mlflow_logger, accelerator='gpu', devices=1)
                 trainer.fit(model, train_dataloaders=train_dataloader_inner, val_dataloaders=test_dataloader_inner)
 
-                # Extract validation C-index values for the final 10 epochs
-                val_c_indices = []
-                for epoch in range(max_epochs - 10, max_epochs):
-                    # Get the validation C-index logged by LightningModule
-                    val_c_index_value = trainer.callback_metrics['val_c_index_objective']
-                    val_c_indices.append(val_c_index_value)
+                # Extract validation C-index value for the final epoch of inner fold
+                val_c_index_inner_fold = trainer.callback_metrics['val_c_index_objective']
+                val_c_indices_inner_fold.append(val_c_index_inner_fold)
 
-                # Calculate the average of the final 10 validation C-indices
-                avg_val_c_index = np.mean(val_c_indices)
+            # Calculate the average of validation C-indices for this inner fold
+            avg_val_c_index_inner_fold = np.mean(val_c_indices_inner_fold)
+            return avg_val_c_index_inner_fold
 
-                return avg_val_c_index 
+        # Create an Optuna study and optimize hyperparameters for this outer fold
+        study_outer = optuna.create_study(direction="maximize")
+        study_outer.optimize(objective, n_trials=3)
 
-            # Create an Optuna study and optimize hyperparameters
-            study = optuna.create_study(direction="maximize")
-            study.optimize(objective, n_trials=3)
+        # Get the best hyperparameters for this outer fold
+        best_params_outer = study_outer.best_params
 
-            # Get the best hyperparameters
-            best_params = study.best_params
+        # Use the best hyperparameters to train your final model for this outer fold
+        final_model_outer = Survivalmodel(
+            input_dim=int(train_dataset.X.shape[1]),
+            dim_2=best_params_outer["dim_2"],
+            dim_3=best_params_outer["dim_3"],
+            drop=best_params_outer["drop"],
+            l2_reg=best_params_outer["l2_reg"]
+        )
 
-            # Use the best hyperparameters to train your final model for this fold
-            final_model = Survivalmodel(
-                input_dim=int(train_dataset.X.shape[1]),
-                dim_2=best_params["dim_2"],
-                dim_3=best_params["dim_3"],
-                drop=best_params["drop"],
-                l2_reg=best_params["l2_reg"]
-            )
+        trainer = pl.Trainer(max_epochs=max_epochs, logger=final_model_outer.mlflow_logger, accelerator='gpu', devices=1)
+        trainer.fit(final_model_outer, train_dataloaders=train_dataloader_outer, val_dataloaders=test_dataloader_outer)
 
-            trainer = pl.Trainer(max_epochs=max_epochs, logger=final_model.mlflow_logger, accelerator='gpu', devices=1)
-            trainer.fit(final_model, train_dataloaders=train_dataloader_inner, val_dataloaders=test_dataloader_inner)
-
-            # Evaluate the final model on the outer fold test set
-            test_result = trainer.test(dataloaders=test_dataloader_outer)
-            print(f"Test C-index for Outer Fold {fold_idx + 1}: {test_result[0]['test_c_index']}")
+        # Evaluate the final model on the outer fold test set
+        test_result = trainer.test(dataloaders=test_dataloader_outer)
+        print(f"Test C-index for Outer Fold {fold_idx + 1}: {test_result[0]['test_c_index']}")
 
 
