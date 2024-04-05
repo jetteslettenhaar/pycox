@@ -188,6 +188,8 @@ class Regularization(object):
 class Survivalmodel(pl.LightningModule):
     def __init__(self, input_dim, dim_2, dim_3, drop, l2_reg):
         super().__init__()
+        # Set a random seed again
+        torch.manual_seed(seed)
         # We use the FullyConnectedNet as a model to replicate DeepSurv
         self.best_c_index = 0.0
         self.drop = drop
@@ -333,7 +335,7 @@ if __name__ == "__main__":
     max_epochs = 800
 
     # Define outer K-fold cross-validation
-    outer_kfold = KFold(n_splits=outer_k_folds, shuffle=True)
+    outer_kfold = KFold(n_splits=outer_k_folds, shuffle=True, random_state=seed)
 
     # Lists to store test C-indices for each outer fold
     test_c_indices_outer_folds = []
@@ -351,7 +353,7 @@ if __name__ == "__main__":
         test_dataloader_outer = DataLoader(test_data_outer, batch_size=len(test_data_outer))
 
         # Create inner K-fold cross-validation
-        inner_kfold = KFold(n_splits=inner_k_folds, shuffle=True)
+        inner_kfold = KFold(n_splits=inner_k_folds, shuffle=True, random_state=seed)
 
         # Lists to store validation C-indices for all inner folds
         val_c_indices_all_folds = []
@@ -398,7 +400,7 @@ if __name__ == "__main__":
 
             # Create an Optuna study and optimize hyperparameters
             study = optuna.create_study(direction="maximize")
-            study.optimize(objective, n_trials=3)
+            study.optimize(objective, n_trials=15)
 
             # Get the best hyperparameters
             best_params = study.best_params
