@@ -5,9 +5,13 @@ The cox proportional hazard model (CPH), so I can see which factores will influe
 # Imports
 import h5py
 import pandas as pd
+import numpy as np
 from lifelines import CoxPHFitter
 from lifelines.utils import k_fold_cross_validation
 import matplotlib.pyplot as plt
+
+# Set manual seed
+seed = 42
 
 # Lets start with loading the data from the models
 
@@ -50,7 +54,7 @@ def load_data_from_h5(filepath):
 
 # 1. I will start with my survival models
 # 1.1 Patients with available images
-filepath = 'my_models/simple_model_all.h5'
+filepath = 'my_models/simple_model_all_RFS.h5'
 train_df, test_df, combined_df = load_data_from_h5(filepath)
 print(combined_df)
 
@@ -64,12 +68,26 @@ print(combined_df)
 
 cph = CoxPHFitter(penalizer=0.001)
 
+# Fit the CoxPHFitter to your training data
+cph.fit(combined_df.loc['train'], duration_col='y', event_col='e')
+
+# After fitting, you can print out the summary of the fitted model
+cph.print_summary()
+
 # Perform k-fold cross validation
 # Specify number of folds
 num_folds = 5
-scores = k_fold_cross_validation(cph, combined_df, duration_col='y', event_col='e', k=num_folds, scoring_method='concordance_index')
+scores = k_fold_cross_validation(cph, combined_df, duration_col='y', event_col='e', k=num_folds, scoring_method='concordance_index', seed=seed)
 
 # Print the cross-validation scores
 print("Cross-validation C-index scores:", scores)
-mean_score = sum(scores) / len(scores)
+
+# Calculate mean score
+mean_score = np.mean(scores)
 print("Mean C-index:", mean_score)
+
+# Calculate 95% confidence interval
+confidence_interval = 1.96 * np.std(scores) / np.sqrt(len(scores))
+lower_bound = mean_score - confidence_interval
+upper_bound = mean_score + confidence_interval
+print("95% Confidence Interval:", (lower_bound, upper_bound))
