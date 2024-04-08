@@ -31,7 +31,6 @@ from pytorch_lightning.loggers import MLFlowLogger
 import optuna
 from sklearn.model_selection import KFold
 
-
 # --------------------------------------------------------------------------------------------------------
 
 # Let set up device agnostic code
@@ -57,8 +56,12 @@ class SurvivalDataset(Dataset):
         :param sampling: (str) sampling strategy: "upsampling" or "downsampling"
         '''
         self.h5_file = 'my_models/simple_model_all.h5'  # Default path to .h5 file
-        # loads data
-        self.X, self.e, self.y = self._read_h5_file(is_train)
+        # Load data from .h5 file
+        self.X, self.e, self.y = self._read_h5_file()
+        
+        if not is_train:
+            self._drop_train_data()
+
         # Remove NaN values
         self._drop_na()
         # normalizes data
@@ -70,6 +73,19 @@ class SurvivalDataset(Dataset):
             self._balance_classes(sampling)
 
         print('=> load {} samples'.format(self.X.shape[0]))
+
+    def _drop_train_data(self):
+        '''Drop train data'''
+        test_indices = self._load_test_indices()  # Load indices of test data from .h5 file
+        self.X = np.delete(self.X, test_indices, axis=0)
+        self.e = np.delete(self.e, test_indices, axis=0)
+        self.y = np.delete(self.y, test_indices, axis=0)
+
+    def _load_test_indices(self):
+        '''Load indices of test data from .h5 file'''
+        with h5py.File(self.h5_file, 'r') as f:
+            test_indices = f['test_indices'][()]  # Assuming test indices are stored in 'test_indices' dataset
+        return test_indices
 
     def _drop_na(self):
         ''' Drops rows with NaN values '''
@@ -112,21 +128,12 @@ class SurvivalDataset(Dataset):
         self.e = df['e'].values
         self.y = df['y'].values
 
-    def _read_h5_file(self, is_train):
-        ''' The function to parsing data from .h5 file.
-
-        :return X: (np.array) (n, m)
-            m is features dimension.
-        :return e: (np.array) (n, 1)
-            whether the event occurs? (1: occurs; 0: others)
-        :return y: (np.array) (n, 1)
-            the time of event e.
-        '''
-        split = 'train' if is_train else 'test'
+    def _read_h5_file(self):
+        '''Parsing data from .h5 file.'''
         with h5py.File(self.h5_file, 'r') as f:
-            X = f[split]['x'][()]
-            e = f[split]['e'][()].reshape(-1, 1)
-            y = f[split]['t'][()].reshape(-1, 1)
+            X = f['x'][()]  # Assuming features are stored in 'x' dataset
+            e = f['e'][()]  # Assuming event occurrences are stored in 'e' dataset
+            y = f['t'][()]  # Assuming event times are stored in 't' dataset
         return X, e, y
 
     def _normalize(self):
@@ -203,7 +210,11 @@ class Survivalmodel(pl.LightningModule):
         self.lr = 0.0001
         self.lr_decay_rate = 0.005
 
-        self.mlflow_logger = MLFlowLogger(experiment_name="final_run_all", run_name="simple_model_all")
+        '''Loading test data from .h5 file.'''
+        self.h5_file = 'models/simple_model.h5'  
+        self.X, self.e, self.y = self._read_h5_file()
+
+        self.mlflow_logger = MLFlowLogger(experiment_name="test_set_img", run_name="simple_model")
         mlflow.start_run()
         # We want to log everything (using MLflow)
         self.mlflow_logger.log_hyperparams({
@@ -215,6 +226,14 @@ class Survivalmodel(pl.LightningModule):
             'lr': self.lr,
             'lr_decay_rate': self.lr_decay_rate
         })
+
+    def _read_h5_file(self):
+        '''Parsing test data from .h5 file.'''
+        with h5py.File(self.h5_file, 'r') as f:
+            X = f['x'][()]  # Assuming features are stored in 'x' dataset
+            e = f['e'][()]  # Assuming event occurrences are stored in 'e' dataset
+            y = f['t'][()]  # Assuming event times are stored in 't' dataset
+        return X, e, y
 
     def _build_network(self):
         layers = []
@@ -315,7 +334,7 @@ class Survivalmodel(pl.LightningModule):
         print(f'Best C-Index: {self.best_c_index:.4f}')
         mlflow.end_run()
 
-
+# Rest of your code...
 if __name__ == "__main__":
     parser = argparse.ArgumentParser(
         description="Train model based on clinical information"
@@ -323,128 +342,26 @@ if __name__ == "__main__":
     parser.add_argument("-s", "--sampling", default="False", required=False, type=str, help="if and which sampling method to use.")
 
     args = parser.parse_args()
-    
-    # Create train dataset
-    train_dataset = SurvivalDataset(is_train=True)
+
+    # Create your test dataset
     test_dataset = SurvivalDataset(is_train=False)
-    combined_dataset = torch.utils.data.ConcatDataset([train_dataset, test_dataset])
 
-    # Define the number of folds for outer and inner cross-validation
-    outer_k_folds = 5
-    inner_k_folds = 3
-    max_epochs = 800
+    # Create your train dataset
+    train_dataset = SurvivalDataset(is_train=True)
 
-    # Define outer K-fold cross-validation
-    outer_kfold = KFold(n_splits=outer_k_folds, shuffle=True, random_state=seed)
+    # Define your DataLoader for train dataset
+    train_dataloader = DataLoader(train_dataset, batch_size=batch_size, shuffle=True)
 
-    # Lists to store test C-indices for each outer fold
-    test_c_indices_outer_folds = []
+    # Define your DataLoader for test dataset
+    test_dataloader = DataLoader(test_dataset, batch_size=batch_size, shuffle=False)
 
-    # Lists to store best hyperparameters for each outer fold
-    best_hyperparams_outer_folds = []
+    # Set hyperparameters
+    dim_2 = 64  # Fill in desired value for dim_2
+    dim_3 = 94  # Fill in desired value for dim_3
+    dropout = 0.37504116175222757  # Fill in desired value for dropout
+    l2 = 15.930162980968099  # Fill in desired value for L2 regularization
 
-    # Outer cross-validation loop
-    for fold_idx, (train_indices, test_indices) in enumerate(outer_kfold.split(combined_dataset)):
-        print(f"Outer Fold: {fold_idx + 1}/{outer_k_folds}")
-
-        # Split data into train and test for outer fold
-        train_data_outer = torch.utils.data.Subset(combined_dataset, train_indices)
-        test_data_outer = torch.utils.data.Subset(combined_dataset, test_indices)
-
-        # Create custom dataloaders for outer fold
-        train_dataloader_outer = DataLoader(train_data_outer, batch_size=len(train_data_outer), shuffle=True)
-        test_dataloader_outer = DataLoader(test_data_outer, batch_size=len(test_data_outer))
-
-        # Create inner K-fold cross-validation
-        inner_kfold = KFold(n_splits=inner_k_folds, shuffle=True, random_state=seed)
-
-        # Lists to store validation C-indices for all inner folds
-        val_c_indices_all_folds = []
-
-        # List to store best hyperparameters for each inner fold
-        best_hyperparams_all_folds = []
-
-        for inner_fold_idx, (train_indices_inner, test_indices_inner) in enumerate(inner_kfold.split(train_data_outer)):
-            print(f"\tInner Fold: {inner_fold_idx + 1}/{inner_k_folds}")
-
-            # Split data into train and test for inner fold
-            train_data_inner = torch.utils.data.Subset(train_data_outer, train_indices_inner)
-            test_data_inner = torch.utils.data.Subset(train_data_outer, test_indices_inner)
-
-            # Create custom dataloaders for inner fold
-            train_dataloader_inner = DataLoader(train_data_inner, batch_size=len(train_data_inner), shuffle=True)
-            test_dataloader_inner = DataLoader(test_data_inner, batch_size=len(test_data_inner))
-
-            # Setup objective function for Optuna
-            def objective(trial: optuna.trial.Trial):
-                # Hyperparameters to be optimized
-                dim_2 = trial.suggest_int("dim_2", 1, 100)
-                dim_3 = trial.suggest_int("dim_3", 1, 100)
-                drop = trial.suggest_float("drop", 0, 0.5)
-                l2_reg = trial.suggest_float("l2_reg", 0, 20)
-
-                # Define the actual model
-                model = Survivalmodel(input_dim=int(train_dataset.X.shape[1]), dim_2=dim_2, dim_3=dim_3, drop=drop, l2_reg=l2_reg)
-                model.to(device)
-                trainer = pl.Trainer(max_epochs=max_epochs, logger=model.mlflow_logger, accelerator='gpu', devices=1)
-                trainer.fit(model, train_dataloaders=train_dataloader_inner, val_dataloaders=test_dataloader_inner)
-
-                # Extract validation C-index values for the final 10 epochs
-                val_c_indices = []
-                for epoch in range(max_epochs - 10, max_epochs):
-                    # Get the validation C-index logged by LightningModule
-                    val_c_index_value = trainer.callback_metrics['val_c_index_objective']
-                    val_c_indices.append(val_c_index_value)
-
-                # Calculate the average of the final 10 validation C-indices
-                avg_val_c_index = np.mean(val_c_indices)
-
-                return avg_val_c_index
-
-            # Create an Optuna study and optimize hyperparameters
-            study = optuna.create_study(direction="maximize")
-            study.optimize(objective, n_trials=15)
-
-            # Get the best hyperparameters
-            best_params = study.best_params
-            best_val_c_index = study.best_value
-            best_hyperparams_all_folds.append(best_params)
-            val_c_indices_all_folds.append(best_val_c_index)
-        
-        # Store the best hyperparameters for this outer fold
-        best_hyperparams_outer_folds.append(best_hyperparams_all_folds)
-
-        # Use the best hyperparameters to train your final model for this outer fold
-        final_model_outer = Survivalmodel(
-            input_dim=int(train_dataset.X.shape[1]),
-            dim_2=best_params["dim_2"],
-            dim_3=best_params["dim_3"],
-            drop=best_params["drop"],
-            l2_reg=best_params["l2_reg"]
-        )
-
-        trainer_outer = pl.Trainer(max_epochs=max_epochs, logger=final_model_outer.mlflow_logger, accelerator='gpu', devices=1)
-        trainer_outer.fit(final_model_outer, train_dataloaders=train_dataloader_outer, val_dataloaders=test_dataloader_outer)
-
-        # Extract test C-index from the final training loop's metrics
-        test_c_index_outer_fold = trainer_outer.callback_metrics['val_c_index_objective']
-        print(f"Test C-index for Outer Fold {fold_idx + 1}: {test_c_index_outer_fold}")
-
-        # Store the test C-index for this outer fold
-        test_c_indices_outer_folds.append(test_c_index_outer_fold)
-
-    # Calculate the average test C-index over all outer folds
-    avg_test_c_index = np.mean(test_c_indices_outer_folds)
-
-    # Calculate 95% confidence interval for the test C-index
-    conf_interval = 1.96 * np.std(test_c_indices_outer_folds) / np.sqrt(len(test_c_indices_outer_folds))
-    lower_bound = avg_test_c_index - conf_interval
-    upper_bound = avg_test_c_index + conf_interval
-
-    print(f"Average Test C-index over {outer_k_folds} outer folds: {avg_test_c_index}")
-    print(f"95% Confidence Interval: [{lower_bound}, {upper_bound}]")
-
-    # Print best hyperparameters used for each outer fold
-    print("Best Hyperparameters for Each Outer Fold:")
-    for idx, params in enumerate(best_hyperparams_outer_folds):
-        print(f"Outer Fold {idx + 1}: {params}")
+    # Initialize and train the model
+    model = Survivalmodel(input_dim=int(train_dataset.X.shape[1]), dim_2=dim_2, dim_3=dim_3, drop=dropout, l2_reg=l2)
+    trainer = pl.Trainer(max_epochs=max_epochs, logger=model.mlflow_logger, accelerator='gpu', devices=1)
+    trainer.fit(model, train_dataloader, test_dataloader)
