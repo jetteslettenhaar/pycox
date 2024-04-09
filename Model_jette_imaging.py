@@ -90,55 +90,6 @@ for patient_dict in patient_info_list:
     patient_dict['event'] = patient_dict['event'].astype(float)
     print(patient_dict)
 
-'''
-We can run this if we would like to get the spacing and size (but we already have a histogram, so only run if data changes)
-'''
-
-# shapes = []
-# spacings = []
-# # Assuming `patient_info_list` contains the patient information dictionaries
-# for patient_info in patient_info_list:
-#     # Load the image
-#     image_path = patient_info['img']
-#     image_data = nib.load(image_path)
-#     image = nib.load(image_path).get_fdata()
-
-#     # Get the shape
-#     image_shape = image.shape
-#     shapes.append(image_shape)
-#     # Get the voxel spacing
-#     voxel_spacing = np.array(image_data.header.get_zooms())
-#     spacings.append(voxel_spacing)
-
-# # Print the lists of shapes and spacings
-# print("List of image shapes:", shapes)
-# print("List of voxel spacings:", spacings)
-
-# # Plot histograms of image shapes
-# plt.figure(figsize=(12, 6))
-# plt.subplot(1, 2, 1)
-# plt.hist([shape[0] for shape in shapes], bins=20, color='blue', alpha=0.7, label='Width')
-# plt.hist([shape[1] for shape in shapes], bins=20, color='green', alpha=0.7, label='Height')
-# plt.hist([shape[2] for shape in shapes], bins=20, color='red', alpha=0.7, label='Depth')
-# plt.xlabel('Size')
-# plt.ylabel('Frequency')
-# plt.title('Histogram of Image Shapes')
-# plt.legend()
-
-# # Plot histograms of voxel spacings
-# plt.subplot(1, 2, 2)
-# plt.hist([spacing[0] for spacing in spacings], bins=20, color='blue', alpha=0.7, label='X')
-# plt.hist([spacing[1] for spacing in spacings], bins=20, color='green', alpha=0.7, label='Y')
-# plt.hist([spacing[2] for spacing in spacings], bins=20, color='red', alpha=0.7, label='Z')
-# plt.xlabel('Voxel Spacing')
-# plt.ylabel('Frequency')
-# plt.title('Histogram of Voxel Spacings')
-# plt.legend()
-
-# plt.tight_layout()
-# plt.show()
-# plt.savefig('/trinity/home/r098372/pycox/figures/histograms.png')
-
 
 '''
 The data has been prepared in a dictionary! 
@@ -153,7 +104,30 @@ seed = 42
 torch.manual_seed(seed)
 torch.cuda.manual_seed(seed)
 
-max_image_size = []     # Determine this after spacing has changed, first check whether spacing is okay
+# We need a regularization class just like in the other model to construct the loss function
+class Regularization(object):
+    def __init__(self, order, weight_decay):
+        ''' The initialization of Regularization class
+
+        :param order: (int) norm order number
+        :param weight_decay: (float) weight decay rate
+        '''
+        super(Regularization, self).__init__()
+        self.order = order
+        self.weight_decay = weight_decay
+
+    def __call__(self, model):
+        ''' Performs calculates regularization(self.order) loss for model.
+
+        :param model: (torch.nn.Module object)
+        :return reg_loss: (torch.Tensor) the regularization(self.order) loss
+        '''
+        reg_loss = 0
+        for name, w in model.named_parameters():
+            if 'weight' in name:
+                reg_loss = reg_loss + torch.norm(w, p=self.order)
+        reg_loss = self.weight_decay * reg_loss
+        return reg_loss
 
 class SurvivalImaging(pl.LightningModule):
     def __init__(self):
@@ -175,29 +149,25 @@ class SurvivalImaging(pl.LightningModule):
         # Set the seed again?
         set_determinism(seed=42)
 
-        # Define the data transforms
+        # Calculate median spacing in each direction
+        spacings = []
+        for data in data_dict:
+            # Load image and get spacing
+            img_path = data['img']
+            img = nib.load(img_path)
+            spacing = img.header.get_zooms()
+            spacings.append(spacing)
+        median_spacing = np.median(spacings, axis=0)
+
+        # Resample images using median spacing
         train_transforms = Compose(
             [
                 LoadImaged(keys=['img']),
                 EnsureChannelFirstd(keys=['img']),
-                # Lets start without a spacing transform (we do [1, 1, 1], since this is the smallest spacing approximately)
                 Spacingd(
                     keys=['img'],
-                    pixdim=(1.0, 1.0, 1.0), # Mediaan in alle richtingen 
+                    pixdim=median_spacing.tolist(),
                     mode=('bilinear'),
-                ),
-                Pad(
-                    keys=["img"],
-                    spatial_size=(max_image_size, max_image_size, max_image_size),
-                    method="minimum",
-                ),
-                ScaleIntensityRanged( # Dit even testen in een viewer en kijken wat er gebeurt als je clipt
-                    keys=["image"],
-                    a_min=-57,
-                    a_max=164,
-                    b_min=0.0,
-                    b_max=1.0,
-                    clip=True,
                 ),
             ]
         )
@@ -205,115 +175,157 @@ class SurvivalImaging(pl.LightningModule):
             [
                 LoadImaged(keys=['img']),
                 EnsureChannelFirstd(keys=['img']),
-                # Lets start without a spacing transform (we do [1, 1, 1], since this is the smallest spacing approximately)
                 Spacingd(
                     keys=['img'],
-                    pixdim=(1.0, 1.0, 1.0),
+                    pixdim=median_spacing.tolist(),
                     mode=('bilinear'),
-                ),
-                Pad(
-                    keys=["img"],
-                    spatial_size=(max_image_size, max_image_size, max_image_size),
-                    method="minimum",
-                ),
-                ScaleIntensityRanged(
-                    keys=["image"],
-                    a_min=-57,
-                    a_max=164,
-                    b_min=0.0,
-                    b_max=1.0,
-                    clip=True,
                 ),
             ]
         )
 
-        self.train_ds = Dataset(data = train_files, transform = train_transforms)
-        # Hier doorheen en kijken wat de spacing is (opslaan in een lijst samen met de size) zowel voor validatie als training, hiervoor spacing weghalen, kunt niet de size veranderen
-        # Je kunt de size veranderen met padding tot grootste afbeelding --> minimale value in je beeld
-        # Normalisatie van de intensiteit (Monai, scale intensity range d)
+        # Extract max image size before resizing for padding
+        max_image_size = np.zeros(3)
+        for data in data_dict:
+            img_path = data['img']
+            img = nib.load(img_path)
+            img_size = np.array(img.shape)
+            max_image_size = np.maximum(max_image_size, img_size)
 
+        # Define the rest of the transforms
+        '''
+        We will use WL + (WW/2) for the upper grey level and WL - (WW/2) for the lower level
+        But I will use it approximately, so -125 to +225
+        '''
+        train_transforms.transforms.extend([
+            Pad(
+                keys=["img"],
+                spatial_size=tuple(max_image_size),
+                method="minimum",
+            ),
+            ScaleIntensityRanged(
+                keys=["img"],
+                a_min=-125,
+                a_max=225,
+                b_min=0.0,
+                b_max=1.0,
+                clip=True,
+            ),
+        ])
+        val_transforms.transforms.extend([
+            Pad(
+                keys=["img"],
+                spatial_size=tuple(max_image_size),
+                method="minimum",
+            ),
+            ScaleIntensityRanged(
+                keys=["img"],
+                a_min=-125,
+                a_max=225,
+                b_min=0.0,
+                b_max=1.0,
+                clip=True,
+            ),
+        ])
+
+
+        self.train_ds = Dataset(data = train_files, transform = train_transforms)
         self.val_ds = Dataset(data = val_files, transform = val_transforms)
 
 
-    # def train_dataloader(self):
-    #     train_dataloader = DataLoader(self.train_ds, batch_size=1, shuffle=True)  # Als alles dezelfde size is, kan dit groter
-    #     return train_loader
+    def train_dataloader(self):
+        train_dataloader = DataLoader(self.train_ds, batch_size=1, shuffle=True)  # Als alles dezelfde size is, kan dit groter
+        return train_loader
 
-    # def val_dataloader(self):
-    #     val_dataloader = DataLoader(self.val_ds, batch_size=1)
-    #     return val_dataloader
+    def val_dataloader(self):
+        val_dataloader = DataLoader(self.val_ds, batch_size=1)
+        return val_dataloader
     
-    # def configure_optimizers(self):
-    #     optimizer = torch.optim.SGD(self.parameters(), lr=0.001)        
-    #     def lr_lambda(epoch):
-    #         lr_decay_rate = 0.1                                         
-    #         return 1 / (1 + epoch * lr_decay_rate)                      
-    #     scheduler = torch.optim.lr_scheduler.LambdaLR(optimizer, lr_lambda=lr_lambda)
-    #     return [optimizer], [scheduler]
+    def configure_optimizers(self):
+        optimizer = torch.optim.SGD(self.parameters(), lr=self.lr)        # Learning rate is hyperparameter! (normal is 0.001)
 
-    # def loss_fn()
-    #     mask = torch.ones(y.shape[0], y.shape[0]).to(device)
-    #     mask[(y.permute(*torch.arange(y.ndim - 1, -1, -1)) - y) > 0] = 0
-    #     log_loss = torch.exp(risk_pred) * mask
-    #     log_loss = torch.sum(log_loss, dim=0) / torch.sum(mask, dim=0)
-    #     log_loss = torch.log(log_loss).reshape(-1, 1)
-    #     neg_log_loss = -torch.sum((risk_pred - log_loss) * e) / torch.sum(e)
+        def lr_lambda(epoch):
+            lr_decay_rate = self.lr_decay_rate                          # Learning rate decay is a hyperparameter! (normal is 0.1)
+            return 1 / (1 + epoch * lr_decay_rate)                      # Inverse time decay function using epoch like in DeepSurv
+
+        scheduler = torch.optim.lr_scheduler.LambdaLR(optimizer, lr_lambda=lr_lambda)
+        return [optimizer], [scheduler]
+
+    def loss_fn(self, risk_pred, y, e):
+        mask = torch.ones(y.shape[0], y.shape[0]).to(device)
+        mask[(y.permute(*torch.arange(y.ndim - 1, -1, -1)) - y) > 0] = 0
+        log_loss = torch.exp(risk_pred) * mask
+        log_loss = torch.sum(log_loss, dim=0) / torch.sum(mask, dim=0)
+        log_loss = torch.log(log_loss).reshape(-1, 1)
+        neg_log_loss = -torch.sum((risk_pred - log_loss) * e) / torch.sum(e)
         
-    #     # L2 regularization (not working now, we need Regularisation function!)
-    #     if self.l2_reg > 0:
-    #         l2_loss = self.regularization(self.model)
-    #         return neg_log_loss + l2_loss
-    #     else:
-    #         return neg_log_loss
+        # L2 regularization (not working now, we need Regularisation function!)
+        if self.l2_reg > 0:
+            l2_loss = self.regularization(self.model)
+            return neg_log_loss + l2_loss
+        else:
+            return neg_log_loss
     
-    # def c_index(self, risk_pred, y, e):
-    #     '''
-    #     We want to check whether the inputs are numpy arrays (this is expected in the function concordance_index).
-    #     If not, we have to convert them to numpy arrays. Then we can use the imported function to calculate the c-index
-    #     NOTETHAT this is now only using uncensored data (which is not a lot, especially for test set)
-    #     '''
-    #     if not isinstance(y, np.ndarray):
-    #         y = y.detach().cpu().numpy()
-    #     if not isinstance(risk_pred, np.ndarray):
-    #         risk_pred = risk_pred.detach().cpu().numpy().squeeze()
-    #     if not isinstance(e, np.ndarray):
-    #         e = e.detach().cpu().numpy()
+    def c_index(self, risk_pred, y, e):
+        '''
+        We want to check whether the inputs are numpy arrays (this is expected in the function concordance_index).
+        If not, we have to convert them to numpy arrays. Then we can use the imported function to calculate the c-index
+        NOTETHAT this is now only using uncensored data (which is not a lot, especially for test set)
+        '''
+        if not isinstance(y, np.ndarray):
+            y = y.detach().cpu().numpy()
+        if not isinstance(risk_pred, np.ndarray):
+            risk_pred = risk_pred.detach().cpu().numpy()
+        if not isinstance(e, np.ndarray):
+            e = e.detach().cpu().numpy()
 
-    #     return concordance_index(y, -risk_pred, e) # Risk_pred should have a negative sign
+        return concordance_index(y, risk_pred, e) # Risk_pred should have a negative sign
 
-    # def training_step(self, batch, batch_idx):
-    #     images, y, e = batch['img'], batch['duration'], batch['event']
-    #     risk_pred = self.forward(images)
-    #     loss = self.loss_fn(risk_pred, y, e)
-    #     c_index = self.c_index(risk_pred, y, e)
-    #     return {'loss': loss, 'c_index': c_index, 'risk_pred': risk_pred, 'y': y, 'e': e}
-    
-    # def validation_step(self, batch, batch_idx):
-    #     images, y, e = batch['img'], batch['duration'], batch['event']
+     def training_step(self, batch, batch_idx):
+        images, y, e = batch['img'], batch['duration'], batch['event']
+        risk_pred = self.forward(images)
+        loss = self.loss_fn(risk_pred, y, e)
+
+        # Log loss and predictions for aggregation at the end of the epoch
+        self.log('train_loss_batch', loss, on_step=True, on_epoch=False)
+        self.log('risk_pred_batch', risk_pred, on_step=True, on_epoch=False)
+
+        return loss
+
+    def training_epoch_end(self, outputs):
+        # Aggregate loss and predictions over all batches in the epoch
+        train_loss_epoch = torch.stack([x['train_loss_batch'] for x in outputs]).mean()
+        risk_pred_epoch = torch.cat([x['risk_pred_batch'] for x in outputs], dim=0)
+
+        # Calculate C-index for the epoch
+        c_index_epoch = self.c_index(-risk_pred_epoch, self.y_train, self.e_train)
+
+        # Log aggregated loss and C-index for the epoch
+        self.log('train_loss_epoch', train_loss_epoch, on_step=False, on_epoch=True)
+        self.log('train_c_index_epoch', c_index_epoch, on_step=False, on_epoch=True)
+
+    def validation_step(self, batch, batch_idx):
+        images, y, e = batch['img'], batch['duration'], batch['event']
+        risk_pred = self.forward(images)
+        loss = self.loss_fn(risk_pred, y, e)
+
+        # Log loss and predictions for aggregation at the end of the epoch
+        self.log('val_loss_batch', loss, on_step=True, on_epoch=False)
+        self.log('risk_pred_batch', risk_pred, on_step=True, on_epoch=False)
+
+        return loss
+
+    def validation_epoch_end(self, outputs):
+        # Aggregate loss and predictions over all batches in the epoch
+        val_loss_epoch = torch.stack([x['val_loss_batch'] for x in outputs]).mean()
+        risk_pred_epoch = torch.cat([x['risk_pred_batch'] for x in outputs], dim=0)
+
+        # Calculate C-index for the epoch
+        c_index_epoch = self.c_index(-risk_pred_epoch, self.y_val, self.e_val)
+
+        # Log aggregated loss and C-index for the epoch
+        self.log('val_loss_epoch', val_loss_epoch, on_step=False, on_epoch=True)
+        self.log('val_c_index_epoch', c_index_epoch, on_step=False, on_epoch=True)
 
 
 
-# # We need a regularization class just like in the other model to construct the loss function
-# class Regularization(object):
-#     def __init__(self, order, weight_decay):
-#         ''' The initialization of Regularization class
 
-#         :param order: (int) norm order number
-#         :param weight_decay: (float) weight decay rate
-#         '''
-#         super(Regularization, self).__init__()
-#         self.order = order
-#         self.weight_decay = weight_decay
-
-#     def __call__(self, model):
-#         ''' Performs calculates regularization(self.order) loss for model.
-
-#         :param model: (torch.nn.Module object)
-#         :return reg_loss: (torch.Tensor) the regularization(self.order) loss
-#         '''
-#         reg_loss = 0
-#         for name, w in model.named_parameters():
-#             if 'weight' in name:
-#                 reg_loss = reg_loss + torch.norm(w, p=self.order)
-#         reg_loss = self.weight_decay * reg_loss
-#         return reg_loss
