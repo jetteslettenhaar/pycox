@@ -203,7 +203,7 @@ class Survivalmodel(pl.LightningModule):
         self.lr = 0.0001
         self.lr_decay_rate = 0.005
 
-        self.mlflow_logger = MLFlowLogger(experiment_name="FINAL_seed_run_all_models", run_name="simple_model_all")
+        self.mlflow_logger = MLFlowLogger(experiment_name="FINAL_newseed_run_all_models", run_name="simple_model_all")
         mlflow.start_run()
         # We want to log everything (using MLflow)
         self.mlflow_logger.log_hyperparams({
@@ -356,6 +356,8 @@ if __name__ == "__main__":
         inner_kfold = KFold(n_splits=inner_k_folds, shuffle=True, random_state=seed)
         best_val_c_indices_inner_folds = []
         best_hyperparams_inner_folds = []
+        
+        hyperparams_dict = {}
 
         for inner_fold_idx, (train_indices_inner, test_indices_inner) in enumerate(inner_kfold.split(train_data_outer)):
             print(f"\tInner Fold: {inner_fold_idx + 1}/{inner_k_folds}")
@@ -399,25 +401,28 @@ if __name__ == "__main__":
             study = optuna.create_study(direction="maximize", sampler=sampler)
             study.optimize(objective, n_trials=15)
 
-             # Get the best hyperparameters for this inner fold
-            best_params_inner = study.best_params
-            best_val_c_index_inner = study.best_value
-
-            # Store the best hyperparameters and their corresponding validation C-index
-            best_hyperparams_inner_folds.append(best_params_inner)
-            best_val_c_indices_inner_folds.append(best_val_c_index_inner)
+             # Get the hyperparameters and their corresponding validation C-indices for this inner fold
+            for trial in study.trials:
+                if trial.state == optuna.trial.TrialState.COMPLETE:
+                    trial_params = tuple(trial.params.items())
+                    trial_c_index = trial.value
+                    
+                    # Add hyperparameters and validation C-index to the dictionary
+                    if trial_params in hyperparams_dict:
+                        hyperparams_dict[trial_params].append(trial_c_index)
+                    else:
+                        hyperparams_dict[trial_params] = [trial_c_index]
             
-        # Determine the best hyperparameters and their corresponding validation C-index across all inner folds
-        best_hyperparams_outer_fold = best_hyperparams_inner_folds[np.argmax(best_val_c_indices_inner_folds)]
-        best_hyperparams_outer_folds.append(best_hyperparams_outer_fold)
+        # Calculate the average validation C-index for each set of hyperparameters
+        avg_c_indices_per_hyperparams = {params: np.mean(c_indices) for params, c_indices in hyperparams_dict.items()}
+
+        # Determine the best hyperparameters based on the highest average validation C-index across all inner folds
+        best_hyperparams_outer_fold = max(avg_c_indices_per_hyperparams, key=avg_c_indices_per_hyperparams.get)
 
         # Use the best hyperparameters to train your final model for this outer fold
         final_model_outer = Survivalmodel(
             input_dim=int(train_dataset.X.shape[1]),
-            dim_2=best_hyperparams_outer_fold["dim_2"],
-            dim_3=best_hyperparams_outer_fold["dim_3"],
-            drop=best_hyperparams_outer_fold["drop"],
-            l2_reg=best_hyperparams_outer_fold["l2_reg"]
+            **dict(best_hyperparams_outer_fold)  # Pass the best hyperparameters directly as keyword arguments
         )
 
         trainer_outer = pl.Trainer(max_epochs=max_epochs, logger=final_model_outer.mlflow_logger, accelerator='gpu', devices=1)
