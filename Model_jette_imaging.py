@@ -29,6 +29,8 @@ from monai.transforms import (
 )
 
 import matplotlib.pyplot as plt
+import mlflow
+from pytorch_lightning.loggers import MLFlowLogger
 
 # Import CSV file to get the labels of my images (pickle does not work with this (old) Python version)
 labels = pd.read_csv('my_models/outcome_model_imaging.csv', delimiter=',')
@@ -90,7 +92,7 @@ for patient_dict in patient_info_list:
     patient_dict['event'] = patient_dict['event'].astype(float)
     print(patient_dict)
 
-
+# -------------------------------------------------------------------------------------------------------------------------------
 '''
 The data has been prepared in a dictionary! 
 Now we need to actually make the model which contains 'prepare_data' function to actually load the dictionary.
@@ -130,7 +132,7 @@ class Regularization(object):
         return reg_loss
 
 class SurvivalImaging(pl.LightningModule):
-    def __init__(self):
+    def __init__(self, l2_reg):
         super().__init__()
         self.model = Densenet121(
             spatial_dims=3,
@@ -138,6 +140,13 @@ class SurvivalImaging(pl.LightningModule):
             out_channels=1
         )
         self.model.to(device)
+        self.regularization = Regularization(order=2, weight_decay=self.l2_reg)
+
+        self.mlflow_logger = MLFlowLogger(experiment_name="imaging_model", run_name="first_run")
+        mlflow.start_run()
+        self.mlflow_logger.log_hyperparams({
+            'l2_reg': l2_reg
+        })
 
     def forward(self, x):
         return self.model(x)
@@ -193,8 +202,8 @@ class SurvivalImaging(pl.LightningModule):
 
         # Define the rest of the transforms
         '''
-        We will use WL + (WW/2) for the upper grey level and WL - (WW/2) for the lower level
-        But I will use it approximately, so -125 to +225
+        We will use (or at least should, but dont get the formula yet) WL + (WW/2) for the upper grey level and WL - (WW/2) for the lower level
+        I will use the values for soft tissue in the abdomen for now, so -125 to +225
         '''
         train_transforms.transforms.extend([
             Pad(
@@ -300,6 +309,8 @@ class SurvivalImaging(pl.LightningModule):
         c_index_epoch = self.c_index(-risk_pred_epoch, self.y_train, self.e_train)
 
         # Log aggregated loss and C-index for the epoch
+        self.mlflow_logger.log_metrics({'train_c_index': c_index_epoch})
+        self.mlflow_logger.log_metrics({'train_loss': train_loss_epoch.item()})
         self.log('train_loss_epoch', train_loss_epoch, on_step=False, on_epoch=True)
         self.log('train_c_index_epoch', c_index_epoch, on_step=False, on_epoch=True)
 
@@ -323,9 +334,24 @@ class SurvivalImaging(pl.LightningModule):
         c_index_epoch = self.c_index(-risk_pred_epoch, self.y_val, self.e_val)
 
         # Log aggregated loss and C-index for the epoch
+        self.mlflow_logger.log_metrics({'val_c_index': c_index_epoch})
+        self.mlflow_logger.log_metrics({'val_loss': val_loss_epoch.item()})
         self.log('val_loss_epoch', val_loss_epoch, on_step=False, on_epoch=True)
         self.log('val_c_index_epoch', c_index_epoch, on_step=False, on_epoch=True)
 
+# ---------------------------------------------------------------------------------------------------------------------------------
+max_epochs = 500
+l2_reg = 0
+model = SurvivalImaging(l2_reg)
 
+# Start the trainer
+trainer = pl.Trainer(
+    max_epochs = max_epochs,
+    logger = model.mlflow_logger,
+    accelerator = 'gpu',
+    devices = 1,
+)
+
+trainer.fit(model)
 
 

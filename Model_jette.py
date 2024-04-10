@@ -203,7 +203,7 @@ class Survivalmodel(pl.LightningModule):
         self.lr = 0.0001
         self.lr_decay_rate = 0.005
 
-        self.mlflow_logger = MLFlowLogger(experiment_name="FINAL_run_all_models", run_name="simple_model_all")
+        self.mlflow_logger = MLFlowLogger(experiment_name="FINAL_seed_run_all_models", run_name="simple_model_all")
         mlflow.start_run()
         # We want to log everything (using MLflow)
         self.mlflow_logger.log_hyperparams({
@@ -395,7 +395,8 @@ if __name__ == "__main__":
                 return avg_val_c_index
 
             # Create an Optuna study and optimize hyperparameters
-            study = optuna.create_study(direction="maximize")
+            sampler = optuna.samplers.TPESampler(seed=seed)
+            study = optuna.create_study(direction="maximize", sampler=sampler)
             study.optimize(objective, n_trials=15)
 
              # Get the best hyperparameters for this inner fold
