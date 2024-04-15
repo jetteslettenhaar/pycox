@@ -56,7 +56,7 @@ class SurvivalDataset(Dataset):
         :param threshold_value: (int) threshold value to filter out samples with 'y' values above this threshold
         :param sampling: (str) sampling strategy: "upsampling" or "downsampling"
         '''
-        self.h5_file = 'my_models/simple_model_all.h5'  # Default path to .h5 file
+        self.h5_file = 'my_models/clinical_model_all_RFS.h5'  # Default path to .h5 file
         # loads data
         self.X, self.e, self.y = self._read_h5_file(is_train)
         # Remove NaN values
@@ -203,7 +203,7 @@ class Survivalmodel(pl.LightningModule):
         self.lr = 0.0001
         self.lr_decay_rate = 0.005
 
-        self.mlflow_logger = MLFlowLogger(experiment_name="FINAL_newseed_run_all_models", run_name="simple_model_all")
+        self.mlflow_logger = MLFlowLogger(experiment_name="Model_Abstract", run_name="clinical_model_RFS")
         mlflow.start_run()
         # We want to log everything (using MLflow)
         self.mlflow_logger.log_hyperparams({
@@ -340,6 +340,9 @@ if __name__ == "__main__":
     best_hyperparams_outer_folds = []
     test_c_indices_outer_folds = []
 
+    # Define a list to store the best hyperparameters for all outer folds
+    all_best_hyperparams_outer_folds = []
+
     # Outer cross-validation loop
     for fold_idx, (train_indices, test_indices) in enumerate(outer_kfold.split(combined_dataset)):
         print(f"Outer Fold: {fold_idx + 1}/{outer_k_folds}")
@@ -419,6 +422,9 @@ if __name__ == "__main__":
         # Determine the best hyperparameters based on the highest average validation C-index across all inner folds
         best_hyperparams_outer_fold = max(avg_c_indices_per_hyperparams, key=avg_c_indices_per_hyperparams.get)
 
+        # Append the best hyperparameters for this outer fold to the list
+        all_best_hyperparams_outer_folds.append(best_hyperparams_outer_fold)
+
         # Use the best hyperparameters to train your final model for this outer fold
         final_model_outer = Survivalmodel(
             input_dim=int(train_dataset.X.shape[1]),
@@ -443,10 +449,10 @@ if __name__ == "__main__":
     lower_bound = avg_test_c_index - conf_interval
     upper_bound = avg_test_c_index + conf_interval
 
-    print(f"Average Test C-index over {outer_k_folds} outer folds: {avg_test_c_index}")
+    print(f"Average Test C-index over {outer_k_folds} outer folds (clinical all RFS final): {avg_test_c_index}")
     print(f"95% Confidence Interval: [{lower_bound}, {upper_bound}]")
 
-    # Print best hyperparameters used for each outer fold
-    print("Best Hyperparameters for Each Outer Fold:")
-    for idx, params in enumerate(best_hyperparams_outer_folds):
-        print(f"Outer Fold {idx + 1}: {params}")
+    # Print best hyperparameters used for all outer folds
+    print("Best Hyperparameters for All Outer Folds:")
+    for idx, best_hyperparams in enumerate(all_best_hyperparams_outer_folds):
+        print(f"Outer Fold {idx + 1}: {best_hyperparams}")

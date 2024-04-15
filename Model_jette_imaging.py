@@ -5,6 +5,9 @@ All dictionaries of all patients should be placed in a list
 '''
 
 # Lets start again by importing the important things
+import ctypes
+libgcc_s = ctypes.CDLL('libgcc_s.so.1')
+
 import torch
 from torch import nn
 import pytorch_lightning as pl
@@ -26,11 +29,15 @@ from monai.transforms import (
     EnsureChannelFirstd,
     Orientationd,
     Spacingd,
+    Pad,
+    ScaleIntensityRanged,
 )
 
 import matplotlib.pyplot as plt
 import mlflow
 from pytorch_lightning.loggers import MLFlowLogger
+
+from torch.utils.data import DataLoader
 
 # Import CSV file to get the labels of my images (pickle does not work with this (old) Python version)
 labels = pd.read_csv('my_models/outcome_model_imaging.csv', delimiter=',')
@@ -140,6 +147,7 @@ class SurvivalImaging(pl.LightningModule):
             out_channels=1
         )
         self.model.to(device)
+        self.l2_reg = l2_reg
         self.regularization = Regularization(order=2, weight_decay=self.l2_reg)
 
         self.mlflow_logger = MLFlowLogger(experiment_name="imaging_model", run_name="first_run")
@@ -147,6 +155,8 @@ class SurvivalImaging(pl.LightningModule):
         self.mlflow_logger.log_hyperparams({
             'l2_reg': l2_reg
         })
+        self.lr = 0.01
+        self.lr_decay_rate = 0.005
 
     def forward(self, x):
         return self.model(x)
@@ -169,28 +179,25 @@ class SurvivalImaging(pl.LightningModule):
         median_spacing = np.median(spacings, axis=0)
 
         # Resample images using median spacing
-        train_transforms = Compose(
-            [
-                LoadImaged(keys=['img']),
-                EnsureChannelFirstd(keys=['img']),
-                Spacingd(
-                    keys=['img'],
-                    pixdim=median_spacing.tolist(),
-                    mode=('bilinear'),
-                ),
-            ]
-        )
-        val_transforms = Compose(
-            [
-                LoadImaged(keys=['img']),
-                EnsureChannelFirstd(keys=['img']),
-                Spacingd(
-                    keys=['img'],
-                    pixdim=median_spacing.tolist(),
-                    mode=('bilinear'),
-                ),
-            ]
-        )
+        train_transforms = [
+            LoadImaged(keys=['img']),
+            EnsureChannelFirstd(keys=['img']),
+            Spacingd(
+                keys=['img'],
+                pixdim=median_spacing.tolist(),
+                mode=('bilinear'),
+            ),
+        ]
+
+        val_transforms = [
+            LoadImaged(keys=['img']),
+            EnsureChannelFirstd(keys=['img']),
+            Spacingd(
+                keys=['img'],
+                pixdim=median_spacing.tolist(),
+                mode=('bilinear'),
+            ),
+        ]
 
         # Extract max image size before resizing for padding
         max_image_size = np.zeros(3)
@@ -205,7 +212,8 @@ class SurvivalImaging(pl.LightningModule):
         We will use (or at least should, but dont get the formula yet) WL + (WW/2) for the upper grey level and WL - (WW/2) for the lower level
         I will use the values for soft tissue in the abdomen for now, so -125 to +225
         '''
-        train_transforms.transforms.extend([
+        # Extend transforms
+        train_transforms.extend([
             Pad(
                 keys=["img"],
                 spatial_size=tuple(max_image_size),
@@ -220,7 +228,7 @@ class SurvivalImaging(pl.LightningModule):
                 clip=True,
             ),
         ])
-        val_transforms.transforms.extend([
+        val_transforms.extend([
             Pad(
                 keys=["img"],
                 spatial_size=tuple(max_image_size),
@@ -235,7 +243,6 @@ class SurvivalImaging(pl.LightningModule):
                 clip=True,
             ),
         ])
-
 
         self.train_ds = Dataset(data = train_files, transform = train_transforms)
         self.val_ds = Dataset(data = val_files, transform = val_transforms)
@@ -289,7 +296,7 @@ class SurvivalImaging(pl.LightningModule):
 
         return concordance_index(y, risk_pred, e) # Risk_pred should have a negative sign
 
-     def training_step(self, batch, batch_idx):
+    def training_step(self, batch, batch_idx):
         images, y, e = batch['img'], batch['duration'], batch['event']
         risk_pred = self.forward(images)
         loss = self.loss_fn(risk_pred, y, e)

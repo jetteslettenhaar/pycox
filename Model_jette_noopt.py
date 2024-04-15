@@ -1,3 +1,5 @@
+# Step 1: Import all important modules
+
 import ctypes
 libgcc_s = ctypes.CDLL('libgcc_s.so.1')
 
@@ -26,6 +28,10 @@ from monai.networks.nets import FullyConnectedNet
 import mlflow
 from pytorch_lightning.loggers import MLFlowLogger
 
+import optuna
+from sklearn.model_selection import KFold
+
+
 # --------------------------------------------------------------------------------------------------------
 
 # Let set up device agnostic code
@@ -50,7 +56,7 @@ class SurvivalDataset(Dataset):
         :param threshold_value: (int) threshold value to filter out samples with 'y' values above this threshold
         :param sampling: (str) sampling strategy: "upsampling" or "downsampling"
         '''
-        self.h5_file = 'my_models/simple_model_all.h5'  # Default path to .h5 file
+        self.h5_file = 'my_models/clinical_model_all_RFS.h5'  # Default path to .h5 file
         # loads data
         self.X, self.e, self.y = self._read_h5_file(is_train)
         # Remove NaN values
@@ -182,6 +188,8 @@ class Regularization(object):
 class Survivalmodel(pl.LightningModule):
     def __init__(self, input_dim, dim_2, dim_3, drop, l2_reg):
         super().__init__()
+        # Set a random seed again
+        torch.manual_seed(seed)
         # We use the FullyConnectedNet as a model to replicate DeepSurv
         self.best_c_index = 0.0
         self.drop = drop
@@ -195,7 +203,7 @@ class Survivalmodel(pl.LightningModule):
         self.lr = 0.0001
         self.lr_decay_rate = 0.005
 
-        self.mlflow_logger = MLFlowLogger(experiment_name="try_parameters", run_name="simple_model_all")
+        self.mlflow_logger = MLFlowLogger(experiment_name="TEST_Model_Abstract", run_name="clinical_model_RFS")
         mlflow.start_run()
         # We want to log everything (using MLflow)
         self.mlflow_logger.log_hyperparams({
@@ -282,12 +290,7 @@ class Survivalmodel(pl.LightningModule):
 
         self.mlflow_logger.log_metrics({'val_c_index': c_index})
         self.mlflow_logger.log_metrics({'val_loss': loss.item()})
-        self.log('val_c_index_objective', c_index)
-
-        # Check if the current c-index is better than the previous best
-        if c_index > self.best_c_index:
-            self.best_c_index = c_index
-            self.best_model_state = self.model.state_dict().copy()  # Save the model state
+        self.log('val_c_index_objective', c_index, on_epoch=True)
 
         return {'loss': loss, 'c_index': c_index, 'risk_pred': risk_pred, 'y': y, 'e': e}
 
@@ -312,20 +315,59 @@ if __name__ == "__main__":
     # Create train dataset
     train_dataset = SurvivalDataset(is_train=True)
     test_dataset = SurvivalDataset(is_train=False)
+    combined_dataset = torch.utils.data.ConcatDataset([train_dataset, test_dataset])
 
     # Create custom dataloaders
     train_dataloader = DataLoader(train_dataset, batch_size=len(train_dataset), shuffle=True)
     test_dataloader = DataLoader(test_dataset, batch_size=len(test_dataset))
 
-    print(torch.cuda.is_available())
+    # Define the number of folds for outer cross-validation
+    outer_k_folds = 5
+    max_epochs = 800
 
-    # Set hyperparameters
-    dim_2 = 6  # Fill in desired value for dim_2
-    dim_3 = 91  # Fill in desired value for dim_3
-    dropout = 0.16121370836233162  # Fill in desired value for dropout
-    l2 = 18.16864371027304  # Fill in desired value for L2 regularization
+    # Define outer K-fold cross-validation
+    outer_kfold = KFold(n_splits=outer_k_folds, shuffle=True, random_state=seed)
 
-    # Initialize and train the model
-    model = Survivalmodel(input_dim=int(train_dataset.X.shape[1]), dim_2=dim_2, dim_3=dim_3, drop=dropout, l2_reg=l2)
-    trainer = pl.Trainer(max_epochs=max_epochs, logger=model.mlflow_logger, accelerator='gpu', devices=1)
-    trainer.fit(model, train_dataloader, test_dataloader)
+    best_hyperparams_outer_folds = []
+    test_c_indices_outer_folds = []
+
+    # Outer cross-validation loop
+    for fold_idx, (train_indices, test_indices) in enumerate(outer_kfold.split(combined_dataset)):
+        print(f"Outer Fold: {fold_idx + 1}/{outer_k_folds}")
+
+        # Split data into train and test for outer fold
+        train_data_outer = torch.utils.data.Subset(combined_dataset, train_indices)
+        test_data_outer = torch.utils.data.Subset(combined_dataset, test_indices)
+
+        # Create custom dataloaders for outer fold
+        train_dataloader_outer = DataLoader(train_data_outer, batch_size=len(train_data_outer), shuffle=True)
+        test_dataloader_outer = DataLoader(test_data_outer, batch_size=len(test_data_outer))
+
+        # Manually choose hyperparameters
+        dim_2 = 84  # Example hyperparameter, you should choose based on prior knowledge or experimentation
+        dim_3 = 22
+        drop = 0.09091248360355031
+        l2_reg = 3.6680901970686763
+
+        # Create and train the model with the chosen hyperparameters
+        final_model_outer = Survivalmodel(input_dim=int(train_dataset.X.shape[1]), dim_2=dim_2, dim_3=dim_3, drop=drop, l2_reg=l2_reg)
+        trainer_outer = pl.Trainer(max_epochs=max_epochs, logger=final_model_outer.mlflow_logger, accelerator='gpu', devices=1)
+        trainer_outer.fit(final_model_outer, train_dataloaders=train_dataloader_outer, val_dataloaders=test_dataloader_outer)
+
+        # Extract test C-index from the final training loop's metrics
+        test_c_index_outer_fold = trainer_outer.callback_metrics['val_c_index_objective']
+        print(f"Test C-index for Outer Fold {fold_idx + 1}: {test_c_index_outer_fold}")
+
+        # Store the test C-index for this outer fold
+        test_c_indices_outer_folds.append(test_c_index_outer_fold)
+
+    # Calculate the average test C-index over all outer folds
+    avg_test_c_index = np.mean(test_c_indices_outer_folds)
+
+    # Calculate 95% confidence interval for the test C-index
+    conf_interval = 1.96 * np.std(test_c_indices_outer_folds) / np.sqrt(len(test_c_indices_outer_folds))
+    lower_bound = avg_test_c_index - conf_interval
+    upper_bound = avg_test_c_index + conf_interval
+
+    print(f"Average Test C-index over {outer_k_folds} outer folds (TEST clinical RFS): {avg_test_c_index}")
+    print(f"95% Confidence Interval: [{lower_bound}, {upper_bound}]")

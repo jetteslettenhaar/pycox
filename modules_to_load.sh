@@ -4,7 +4,7 @@
 #SBATCH --gres=gpu:1  
 #SBATCH --exclude=gpu002
 #SBATCH -p short       
-#SBATCH -t 07:00:00
+#SBATCH -t 24:00:00
 #SBATCH -o /trinity/home/r098372/pycox/output/out_%j.log
 #SBATCH -e /trinity/home/r098372/pycox/output/error_%j.log
 
@@ -14,4 +14,4 @@ module load CUDA/10.1.243-GCC-8.3.0
 
 source /trinity/home/r098372/pycox/venv/bin/activate
 
-python Model_jette.py
+python Model_jette_imaging.py
