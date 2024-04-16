@@ -5,8 +5,8 @@ All dictionaries of all patients should be placed in a list
 '''
 
 # Lets start again by importing the important things
-import ctypes
-libgcc_s = ctypes.CDLL('libgcc_s.so.1')
+# import ctypes
+# libgcc_s = ctypes.CDLL('libgcc_s.so.1')
 
 import torch
 from torch import nn
@@ -29,7 +29,7 @@ from monai.transforms import (
     EnsureChannelFirstd,
     Orientationd,
     Spacingd,
-    Pad,
+    SpatialPadd,
     ScaleIntensityRanged,
 )
 
@@ -99,11 +99,6 @@ for patient_dict in patient_info_list:
     patient_dict['event'] = patient_dict['event'].astype(float)
     print(patient_dict)
 
-# -------------------------------------------------------------------------------------------------------------------------------
-'''
-The data has been prepared in a dictionary! 
-Now we need to actually make the model which contains 'prepare_data' function to actually load the dictionary.
-'''
 
 # Let set up device agnostic code
 device = "cuda" if torch.cuda.is_available() else "cpu"
@@ -112,6 +107,44 @@ device = "cuda" if torch.cuda.is_available() else "cpu"
 seed = 42
 torch.manual_seed(seed)
 torch.cuda.manual_seed(seed)
+
+# We need to determine the spacing and max image after respacing for my transforms
+# Calculate median spacing in each direction
+spacings = []
+for data in patient_info_list:
+    # Load image and get spacing
+    img_path = data['img']
+    img = nib.load(img_path)
+    spacing = img.header.get_zooms()
+    spacings.append(spacing)
+median_spacing = np.median(spacings, axis=0)
+print(median_spacing)
+
+# Assuming you already have `median_spacing` calculated
+# Initialize variables to store maximum dimensions
+max_image_size = [0, 0, 0]                      # [max_height, max_width, max_depth]
+
+# Iterate through each image
+for data in patient_info_list:
+    # Load image
+    img_path = data['img']
+    img = nib.load(img_path)
+    
+    # Rescale image using median spacing
+    spacing = img.header.get_zooms()
+    rescaled_shape = np.ceil(np.array(img.shape) * (np.array(spacing) / median_spacing)).astype(int)
+    
+    # Update maximum dimensions if necessary
+    max_image_size = [max(max_image_size[i], rescaled_shape[i]) for i in range(3)]
+
+# Print the maximum image size
+print("Maximum Image Size after Rescaling:", max_image_size)
+
+# -------------------------------------------------------------------------------------------------------------------------------
+'''
+The data has been prepared in a dictionary! 
+Now we need to actually make the model which contains 'prepare_data' function to actually load the dictionary.
+'''
 
 # We need a regularization class just like in the other model to construct the loss function
 class Regularization(object):
@@ -149,14 +182,19 @@ class SurvivalImaging(pl.LightningModule):
         self.model.to(device)
         self.l2_reg = l2_reg
         self.regularization = Regularization(order=2, weight_decay=self.l2_reg)
+        self.lr = 0.01
+        self.lr_decay_rate = 0.005
 
         self.mlflow_logger = MLFlowLogger(experiment_name="imaging_model", run_name="first_run")
         mlflow.start_run()
         self.mlflow_logger.log_hyperparams({
-            'l2_reg': l2_reg
+            'l2_reg': l2_reg,
+            'lr': self.lr,
+            'lr_decay_rate': self.lr_decay_rate
         })
-        self.lr = 0.01
-        self.lr_decay_rate = 0.005
+        
+        self.training_step_outputs = []
+        self.validation_step_outputs = []
 
     def forward(self, x):
         return self.model(x)
@@ -168,56 +206,20 @@ class SurvivalImaging(pl.LightningModule):
         # Set the seed again?
         set_determinism(seed=42)
 
-        # Calculate median spacing in each direction
-        spacings = []
-        for data in data_dict:
-            # Load image and get spacing
-            img_path = data['img']
-            img = nib.load(img_path)
-            spacing = img.header.get_zooms()
-            spacings.append(spacing)
-        median_spacing = np.median(spacings, axis=0)
-
         # Resample images using median spacing
-        train_transforms = [
-            LoadImaged(keys=['img']),
-            EnsureChannelFirstd(keys=['img']),
-            Spacingd(
-                keys=['img'],
-                pixdim=median_spacing.tolist(),
-                mode=('bilinear'),
-            ),
-        ]
-
-        val_transforms = [
-            LoadImaged(keys=['img']),
-            EnsureChannelFirstd(keys=['img']),
-            Spacingd(
-                keys=['img'],
-                pixdim=median_spacing.tolist(),
-                mode=('bilinear'),
-            ),
-        ]
-
-        # Extract max image size before resizing for padding
-        max_image_size = np.zeros(3)
-        for data in data_dict:
-            img_path = data['img']
-            img = nib.load(img_path)
-            img_size = np.array(img.shape)
-            max_image_size = np.maximum(max_image_size, img_size)
-
-        # Define the rest of the transforms
         '''
         We will use (or at least should, but dont get the formula yet) WL + (WW/2) for the upper grey level and WL - (WW/2) for the lower level
         I will use the values for soft tissue in the abdomen for now, so -125 to +225
         '''
-        # Extend transforms
-        train_transforms.extend([
-            Pad(
-                keys=["img"],
-                spatial_size=tuple(max_image_size),
-                method="minimum",
+
+        # Define transforms
+        train_transforms = Compose([
+            LoadImaged(keys=['img']),
+            EnsureChannelFirstd(keys=['img']),
+            Spacingd(
+                keys=['img'],
+                pixdim=median_spacing.tolist(),
+                mode=('bilinear'),
             ),
             ScaleIntensityRanged(
                 keys=["img"],
@@ -226,13 +228,21 @@ class SurvivalImaging(pl.LightningModule):
                 b_min=0.0,
                 b_max=1.0,
                 clip=True,
+            ),
+            SpatialPadd(
+                keys=["img"],
+                spatial_size=tuple(max_image_size),
+                mode="minimum",
             ),
         ])
-        val_transforms.extend([
-            Pad(
-                keys=["img"],
-                spatial_size=tuple(max_image_size),
-                method="minimum",
+
+        val_transforms = Compose([
+            LoadImaged(keys=['img']),
+            EnsureChannelFirstd(keys=['img']),
+            Spacingd(
+                keys=['img'],
+                pixdim=median_spacing.tolist(),
+                mode=('bilinear'),
             ),
             ScaleIntensityRanged(
                 keys=["img"],
@@ -241,6 +251,11 @@ class SurvivalImaging(pl.LightningModule):
                 b_min=0.0,
                 b_max=1.0,
                 clip=True,
+            ),
+            SpatialPadd(
+                keys=["img"],
+                spatial_size=tuple(max_image_size),
+                mode="minimum",
             ),
         ])
 
@@ -300,51 +315,60 @@ class SurvivalImaging(pl.LightningModule):
         images, y, e = batch['img'], batch['duration'], batch['event']
         risk_pred = self.forward(images)
         loss = self.loss_fn(risk_pred, y, e)
+        batch_dictionary = {
+            'duration': y,
+            'event': e,
+            'loss': loss,
+            'risk_pred': risk_pred
+        }
+        self.training_step_outputs.append(batch_dictionary)
 
-        # Log loss and predictions for aggregation at the end of the epoch
-        self.log('train_loss_batch', loss, on_step=True, on_epoch=False)
-        self.log('risk_pred_batch', risk_pred, on_step=True, on_epoch=False)
+        return batch_dictionary
 
-        return loss
-
-    def training_epoch_end(self, outputs):
+    def on_train_epoch_end(self):
         # Aggregate loss and predictions over all batches in the epoch
-        train_loss_epoch = torch.stack([x['train_loss_batch'] for x in outputs]).mean()
-        risk_pred_epoch = torch.cat([x['risk_pred_batch'] for x in outputs], dim=0)
+        outputs = self.training_step_outputs
+        epoch_loss = torch.stack([x['loss'] for x in outputs]).mean()
+        risk_pred_epoch = torch.cat([x['risk_pred'] for x in outputs], dim=0)
+        y_train_epoch = torch.cat([torch.tensor(batch['duration']) for x in outputs], dim=0)
+        e_train_epoch = torch.cat([torch.tensor(batch['event']) for x in outputs], dim=0)
+
 
         # Calculate C-index for the epoch
-        c_index_epoch = self.c_index(-risk_pred_epoch, self.y_train, self.e_train)
+        c_index_epoch = self.c_index(-risk_pred_epoch, y_train_epoch, e_train_epoch)
 
         # Log aggregated loss and C-index for the epoch
         self.mlflow_logger.log_metrics({'train_c_index': c_index_epoch})
-        self.mlflow_logger.log_metrics({'train_loss': train_loss_epoch.item()})
-        self.log('train_loss_epoch', train_loss_epoch, on_step=False, on_epoch=True)
-        self.log('train_c_index_epoch', c_index_epoch, on_step=False, on_epoch=True)
+        self.mlflow_logger.log_metrics({'train_loss': epoch_loss.item()})
 
     def validation_step(self, batch, batch_idx):
         images, y, e = batch['img'], batch['duration'], batch['event']
         risk_pred = self.forward(images)
         loss = self.loss_fn(risk_pred, y, e)
+        batch_dictionary = {
+            'duration': y,
+            'event': e,
+            'loss': loss,
+            'risk_pred': risk_pred
+        }
+        self.validation_step_outputs.append(batch_dictionary)
 
-        # Log loss and predictions for aggregation at the end of the epoch
-        self.log('val_loss_batch', loss, on_step=True, on_epoch=False)
-        self.log('risk_pred_batch', risk_pred, on_step=True, on_epoch=False)
+        return batch_dictionary
 
-        return loss
-
-    def validation_epoch_end(self, outputs):
+    def on_validation_epoch_end(self):
         # Aggregate loss and predictions over all batches in the epoch
-        val_loss_epoch = torch.stack([x['val_loss_batch'] for x in outputs]).mean()
-        risk_pred_epoch = torch.cat([x['risk_pred_batch'] for x in outputs], dim=0)
+        outputs = self.validation_step_outputs
+        epoch_loss = torch.stack([x['loss'] for x in outputs]).mean()
+        risk_pred_epoch = torch.cat([x['risk_pred'] for x in outputs], dim=0)
+        y_train_epoch = torch.cat([torch.tensor(batch['duration']) for x in outputs], dim=0)
+        e_train_epoch = torch.cat([torch.tensor(batch['event']) for x in outputs], dim=0)
 
         # Calculate C-index for the epoch
-        c_index_epoch = self.c_index(-risk_pred_epoch, self.y_val, self.e_val)
+        c_index_epoch = self.c_index(-risk_pred_epoch, y_train_epoch, e_train_epoch)
 
         # Log aggregated loss and C-index for the epoch
         self.mlflow_logger.log_metrics({'val_c_index': c_index_epoch})
-        self.mlflow_logger.log_metrics({'val_loss': val_loss_epoch.item()})
-        self.log('val_loss_epoch', val_loss_epoch, on_step=False, on_epoch=True)
-        self.log('val_c_index_epoch', c_index_epoch, on_step=False, on_epoch=True)
+        self.mlflow_logger.log_metrics({'val_loss': epoch_loss.item()})
 
 # ---------------------------------------------------------------------------------------------------------------------------------
 max_epochs = 500
