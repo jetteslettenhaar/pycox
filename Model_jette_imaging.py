@@ -38,6 +38,7 @@ import mlflow
 from pytorch_lightning.loggers import MLFlowLogger
 
 from torch.utils.data import DataLoader
+from lifelines.utils import concordance_index
 
 # Import CSV file to get the labels of my images (pickle does not work with this (old) Python version)
 labels = pd.read_csv('my_models/outcome_model_imaging.csv', delimiter=',')
@@ -330,8 +331,8 @@ class SurvivalImaging(pl.LightningModule):
         outputs = self.training_step_outputs
         epoch_loss = torch.stack([x['loss'] for x in outputs]).mean()
         risk_pred_epoch = torch.cat([x['risk_pred'] for x in outputs], dim=0)
-        y_train_epoch = torch.cat([torch.tensor(batch['duration']) for x in outputs], dim=0)
-        e_train_epoch = torch.cat([torch.tensor(batch['event']) for x in outputs], dim=0)
+        y_train_epoch = torch.cat([x['duration'] for x in outputs], dim=0)
+        e_train_epoch = torch.cat([x['event'] for x in outputs], dim=0)
 
 
         # Calculate C-index for the epoch
@@ -360,8 +361,8 @@ class SurvivalImaging(pl.LightningModule):
         outputs = self.validation_step_outputs
         epoch_loss = torch.stack([x['loss'] for x in outputs]).mean()
         risk_pred_epoch = torch.cat([x['risk_pred'] for x in outputs], dim=0)
-        y_train_epoch = torch.cat([torch.tensor(batch['duration']) for x in outputs], dim=0)
-        e_train_epoch = torch.cat([torch.tensor(batch['event']) for x in outputs], dim=0)
+        y_train_epoch = torch.cat([x['duration'] for x in outputs], dim=0)
+        e_train_epoch = torch.cat([x['event'] for x in outputs], dim=0)
 
         # Calculate C-index for the epoch
         c_index_epoch = self.c_index(-risk_pred_epoch, y_train_epoch, e_train_epoch)
