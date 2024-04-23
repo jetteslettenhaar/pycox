@@ -49,7 +49,6 @@ print(labels)
 labels_death = labels[['participant_id', 'Duration_death', 'Event_death']]
 labels_RFS = labels[['participant_id', 'Duration_RFS', 'Event_RFS']]
 
-
 # Lets make a dictionary of the subject, imagepath, duration and event!
 image_path = '/data/scratch/r098372/beelden'
 
@@ -262,11 +261,14 @@ class SurvivalImaging(pl.LightningModule):
 
         self.train_ds = Dataset(data = train_files, transform = train_transforms)
         self.val_ds = Dataset(data = val_files, transform = val_transforms)
+        # Print the lengths of your training and validation datasets
+        print("Length of training dataset:", len(self.train_ds))
+        print("Length of validation dataset:", len(self.val_ds))
 
 
     def train_dataloader(self):
         train_dataloader = DataLoader(self.train_ds, batch_size=1, shuffle=True)  # Als alles dezelfde size is, kan dit groter
-        return train_loader
+        return train_dataloader
 
     def val_dataloader(self):
         val_dataloader = DataLoader(self.val_ds, batch_size=1)
@@ -303,6 +305,16 @@ class SurvivalImaging(pl.LightningModule):
         If not, we have to convert them to numpy arrays. Then we can use the imported function to calculate the c-index
         NOTETHAT this is now only using uncensored data (which is not a lot, especially for test set)
         '''
+         # Print the shapes of risk_pred, y, and e
+        print("Shape of risk_pred:", risk_pred.shape)
+        print("Shape of y:", y.shape)
+        print("Shape of e:", e.shape)
+
+        # Print the values of risk_pred, y, and e
+        print("Risk predictions:", risk_pred)
+        print("Event durations:", y)
+        print("Event indicators:", e)
+
         if not isinstance(y, np.ndarray):
             y = y.detach().cpu().numpy()
         if not isinstance(risk_pred, np.ndarray):
@@ -314,12 +326,16 @@ class SurvivalImaging(pl.LightningModule):
 
     def training_step(self, batch, batch_idx):
         images, y, e = batch['img'], batch['duration'], batch['event']
+        
+        # Inside the training and validation step methods, print the shapes of inputs
+        print("Shape of images:", images.shape)
+        print("Shape of durations:", y.shape)
+        print("Shape of events:", e.shape)
+
         risk_pred = self.forward(images)
-        loss = self.loss_fn(risk_pred, y, e)
         batch_dictionary = {
             'duration': y,
             'event': e,
-            'loss': loss,
             'risk_pred': risk_pred
         }
         self.training_step_outputs.append(batch_dictionary)
@@ -327,29 +343,44 @@ class SurvivalImaging(pl.LightningModule):
         return batch_dictionary
 
     def on_train_epoch_end(self):
-        # Aggregate loss and predictions over all batches in the epoch
-        outputs = self.training_step_outputs
-        epoch_loss = torch.stack([x['loss'] for x in outputs]).mean()
-        risk_pred_epoch = torch.cat([x['risk_pred'] for x in outputs], dim=0)
-        y_train_epoch = torch.cat([x['duration'] for x in outputs], dim=0)
-        e_train_epoch = torch.cat([x['event'] for x in outputs], dim=0)
+        # Initialize lists to store predictions and ground truth values for all batches
+        all_risk_pred = []
+        all_y = []
+        all_e = []
 
+        # Aggregate predictions and ground truth over all batches in the epoch
+        for batch in self.training_step_outputs:
+            all_risk_pred.append(batch['risk_pred'])
+            all_y.append(batch['duration'])
+            all_e.append(batch['event'])
 
-        # Calculate C-index for the epoch
-        c_index_epoch = self.c_index(-risk_pred_epoch, y_train_epoch, e_train_epoch)
+        # Inside the training and validation epoch end methods, print the lengths of lists
+        print("Length of all_risk_pred:", len(all_risk_pred))
+        print("Length of all_y:", len(all_y))
+        print("Length of all_e:", len(all_e))
+
+        # Concatenate predictions and ground truth values along the batch dimension
+        aggregated_risk_pred = torch.cat(all_risk_pred, dim=0)
+        aggregated_y = torch.cat(all_y, dim=0)
+        aggregated_e = torch.cat(all_e, dim=0)
+
+        # Compute loss using aggregated values
+        epoch_loss = self.loss_fn(aggregated_risk_pred, aggregated_y, aggregated_e)
+
+        # # Calculate C-index for the epoch
+        # c_index_epoch = self.c_index(-aggregated_risk_pred, aggregated_y, aggregated_e)
 
         # Log aggregated loss and C-index for the epoch
-        self.mlflow_logger.log_metrics({'train_c_index': c_index_epoch})
+        # self.mlflow_logger.log_metrics({'train_c_index': c_index_epoch})
         self.mlflow_logger.log_metrics({'train_loss': epoch_loss.item()})
+        self.training_step_outputs.clear()  # free memory
 
     def validation_step(self, batch, batch_idx):
         images, y, e = batch['img'], batch['duration'], batch['event']
         risk_pred = self.forward(images)
-        loss = self.loss_fn(risk_pred, y, e)
         batch_dictionary = {
             'duration': y,
             'event': e,
-            'loss': loss,
             'risk_pred': risk_pred
         }
         self.validation_step_outputs.append(batch_dictionary)
@@ -357,19 +388,32 @@ class SurvivalImaging(pl.LightningModule):
         return batch_dictionary
 
     def on_validation_epoch_end(self):
-        # Aggregate loss and predictions over all batches in the epoch
-        outputs = self.validation_step_outputs
-        epoch_loss = torch.stack([x['loss'] for x in outputs]).mean()
-        risk_pred_epoch = torch.cat([x['risk_pred'] for x in outputs], dim=0)
-        y_train_epoch = torch.cat([x['duration'] for x in outputs], dim=0)
-        e_train_epoch = torch.cat([x['event'] for x in outputs], dim=0)
+        # Initialize lists to store predictions and ground truth values for all batches
+        all_risk_pred = []
+        all_y = []
+        all_e = []
 
-        # Calculate C-index for the epoch
-        c_index_epoch = self.c_index(-risk_pred_epoch, y_train_epoch, e_train_epoch)
+        # Aggregate predictions and ground truth over all batches in the epoch
+        for batch in self.validation_step_outputs:
+            all_risk_pred.append(batch['risk_pred'])
+            all_y.append(batch['duration'])
+            all_e.append(batch['event'])
+
+        # Concatenate predictions and ground truth values along the batch dimension
+        aggregated_risk_pred = torch.cat(all_risk_pred, dim=0)
+        aggregated_y = torch.cat(all_y, dim=0)
+        aggregated_e = torch.cat(all_e, dim=0)
+
+        # Compute loss using aggregated values
+        epoch_loss = self.loss_fn(aggregated_risk_pred, aggregated_y, aggregated_e)
+
+        # # Calculate C-index for the epoch
+        # c_index_epoch = self.c_index(-aggregated_risk_pred, aggregated_y, aggregated_e)
 
         # Log aggregated loss and C-index for the epoch
-        self.mlflow_logger.log_metrics({'val_c_index': c_index_epoch})
+        # self.mlflow_logger.log_metrics({'val_c_index': c_index_epoch})
         self.mlflow_logger.log_metrics({'val_loss': epoch_loss.item()})
+        self.validation_step_outputs.clear()  # free memory
 
 # ---------------------------------------------------------------------------------------------------------------------------------
 max_epochs = 500
