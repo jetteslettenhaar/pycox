@@ -226,7 +226,7 @@ class SurvivalImaging(pl.LightningModule):
             EnsureChannelFirstd(keys=['img']),
             Spacingd(
                 keys=['img'],
-                pixdim=median_spacing.tolist(),
+                pixdim=(1, 1, 3),   # Using median in all direction resulted in GPU memory issue (CuDNN error)
                 mode=('bilinear'),
             ),
             ScaleIntensityRanged(
@@ -249,7 +249,7 @@ class SurvivalImaging(pl.LightningModule):
             EnsureChannelFirstd(keys=['img']),
             Spacingd(
                 keys=['img'],
-                pixdim=median_spacing.tolist(),
+                pixdim=(1, 1, 3),
                 mode=('bilinear'),
             ),
             ScaleIntensityRanged(
@@ -298,7 +298,7 @@ class SurvivalImaging(pl.LightningModule):
         log_loss = torch.exp(risk_pred) * mask
         log_loss = torch.sum(log_loss, dim=0) / torch.sum(mask, dim=0)
         log_loss = torch.log(log_loss).reshape(-1, 1)
-        neg_log_loss = -torch.sum((risk_pred - log_loss) * e) / torch.sum(e)
+        neg_log_loss = -torch.sum((risk_pred - log_loss) * e) / (torch.sum(e) + 1e-9) # This 1e-9 is not suppose to be there! So maybe we should be removing it?
         
         # L2 regularization (not working now, we need Regularisation function!)
         if self.l2_reg > 0:
