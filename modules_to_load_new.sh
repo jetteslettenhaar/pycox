@@ -4,7 +4,7 @@
 #SBATCH --gres=gpu:1   
 #SBATCH --exclude=gpu002
 #SBATCH -p hm       
-#SBATCH -t 04:00:00
+#SBATCH -t 24:00:00
 #SBATCH -o /trinity/home/r098372/pycox/output/out_%j.log
 #SBATCH -e /trinity/home/r098372/pycox/output/error_%j.log
 

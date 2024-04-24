@@ -40,6 +40,8 @@ from pytorch_lightning.loggers import MLFlowLogger
 from torch.utils.data import DataLoader
 from lifelines.utils import concordance_index
 
+import torchsummary
+
 # Import CSV file to get the labels of my images (pickle does not work with this (old) Python version)
 labels = pd.read_csv('my_models/outcome_model_imaging.csv', delimiter=',')
 labels = labels.drop(columns=['Censored_death', 'Censored_RFS'])
@@ -126,6 +128,8 @@ max_image_size = [0, 0, 0]                      # [max_height, max_width, max_de
 
 # Iterate through each image
 for data in patient_info_list:
+    # Print patient name
+    print("Patient Name:", data['name'])
     # Load image
     img_path = data['img']
     img = nib.load(img_path)
@@ -133,6 +137,9 @@ for data in patient_info_list:
     # Rescale image using median spacing
     spacing = img.header.get_zooms()
     rescaled_shape = np.ceil(np.array(img.shape) * (np.array(spacing) / median_spacing)).astype(int)
+
+    # Print rescaled shape
+    print("Rescaled Shape:", rescaled_shape)
     
     # Update maximum dimensions if necessary
     max_image_size = [max(max_image_size[i], rescaled_shape[i]) for i in range(3)]
@@ -179,6 +186,7 @@ class SurvivalImaging(pl.LightningModule):
             in_channels=1,
             out_channels=1
         )
+        print(torchsummary.summary(self.model, input_size=(687, 687, 257))) 
         self.model.to(device)
         self.l2_reg = l2_reg
         self.regularization = Regularization(order=2, weight_decay=self.l2_reg)
@@ -231,7 +239,7 @@ class SurvivalImaging(pl.LightningModule):
             ),
             SpatialPadd(
                 keys=["img"],
-                spatial_size=tuple(max_image_size),
+                spatial_size=(32, 32, 32),
                 mode="minimum",
             ),
         ])
@@ -254,7 +262,7 @@ class SurvivalImaging(pl.LightningModule):
             ),
             SpatialPadd(
                 keys=["img"],
-                spatial_size=tuple(max_image_size),
+                spatial_size=(32, 32, 32),
                 mode="minimum",
             ),
         ])
@@ -325,7 +333,10 @@ class SurvivalImaging(pl.LightningModule):
         return concordance_index(y, risk_pred, e) # Risk_pred should have a negative sign
 
     def training_step(self, batch, batch_idx):
-        images, y, e = batch['img'], batch['duration'], batch['event']
+        images, y, e, patient = batch['img'], batch['duration'], batch['event'], batch['name']
+
+        # Print the patient information
+        print("Patient", patient)
         
         # Inside the training and validation step methods, print the shapes of inputs
         print("Shape of images:", images.shape)
@@ -333,9 +344,11 @@ class SurvivalImaging(pl.LightningModule):
         print("Shape of events:", e.shape)
 
         risk_pred = self.forward(images)
+        loss = self.loss_fn(risk_pred, y, e)
         batch_dictionary = {
             'duration': y,
             'event': e,
+            'loss': loss,
             'risk_pred': risk_pred
         }
         self.training_step_outputs.append(batch_dictionary)
@@ -368,19 +381,24 @@ class SurvivalImaging(pl.LightningModule):
         epoch_loss = self.loss_fn(aggregated_risk_pred, aggregated_y, aggregated_e)
 
         # # Calculate C-index for the epoch
-        # c_index_epoch = self.c_index(-aggregated_risk_pred, aggregated_y, aggregated_e)
+        c_index_epoch = self.c_index(-aggregated_risk_pred, aggregated_y, aggregated_e)
 
         # Log aggregated loss and C-index for the epoch
-        # self.mlflow_logger.log_metrics({'train_c_index': c_index_epoch})
+        self.mlflow_logger.log_metrics({'train_c_index': c_index_epoch})
         self.mlflow_logger.log_metrics({'train_loss': epoch_loss.item()})
+        # Log aggregated loss and C-index for the epoch
+        self.log('train_loss', epoch_loss.item())
+        self.log('train_c_index', c_index_epoch)
         self.training_step_outputs.clear()  # free memory
 
     def validation_step(self, batch, batch_idx):
         images, y, e = batch['img'], batch['duration'], batch['event']
         risk_pred = self.forward(images)
+        loss = self.loss_fn(risk_pred, y, e)
         batch_dictionary = {
             'duration': y,
             'event': e,
+            'loss': loss,
             'risk_pred': risk_pred
         }
         self.validation_step_outputs.append(batch_dictionary)
@@ -406,17 +424,18 @@ class SurvivalImaging(pl.LightningModule):
 
         # Compute loss using aggregated values
         epoch_loss = self.loss_fn(aggregated_risk_pred, aggregated_y, aggregated_e)
+        print(epoch_loss)
 
         # # Calculate C-index for the epoch
         # c_index_epoch = self.c_index(-aggregated_risk_pred, aggregated_y, aggregated_e)
 
-        # Log aggregated loss and C-index for the epoch
+        # # Log aggregated loss and C-index for the epoch
         # self.mlflow_logger.log_metrics({'val_c_index': c_index_epoch})
         self.mlflow_logger.log_metrics({'val_loss': epoch_loss.item()})
         self.validation_step_outputs.clear()  # free memory
 
 # ---------------------------------------------------------------------------------------------------------------------------------
-max_epochs = 500
+max_epochs = 200
 l2_reg = 0
 model = SurvivalImaging(l2_reg)
 
