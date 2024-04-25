@@ -89,8 +89,14 @@ for subject_name in os.listdir(image_path):
         'event': subject_info['Event_death'].values[0]
     }
 
-    # Append this all to a list
-    patient_info_list.append(patient_dict)
+    # # Append this all to a list
+    # patient_info_list.append(patient_dict)                        # NORMALLY DO THIS!!!!!
+
+    # Check if event is equal to 1 before appending to the list 
+    if patient_dict['event'] == 1.0:
+        # Append this all to a list
+        patient_info_list.append(patient_dict)
+
 
 # Print the list of patient dictionaries
 for patient_dict in patient_info_list:
@@ -186,7 +192,6 @@ class SurvivalImaging(pl.LightningModule):
             in_channels=1,
             out_channels=1
         )
-        print(torchsummary.summary(self.model, input_size=(687, 687, 257))) 
         self.model.to(device)
         self.l2_reg = l2_reg
         self.regularization = Regularization(order=2, weight_decay=self.l2_reg)
@@ -283,7 +288,7 @@ class SurvivalImaging(pl.LightningModule):
         return val_dataloader
     
     def configure_optimizers(self):
-        optimizer = torch.optim.SGD(self.parameters(), lr=self.lr)        # Learning rate is hyperparameter! (normal is 0.001)
+        optimizer = torch.optim.Adam(self.parameters(), lr=self.lr)        # Learning rate is hyperparameter! (normal is 0.001)
 
         def lr_lambda(epoch):
             lr_decay_rate = self.lr_decay_rate                          # Learning rate decay is a hyperparameter! (normal is 0.1)
@@ -377,11 +382,13 @@ class SurvivalImaging(pl.LightningModule):
         aggregated_y = torch.cat(all_y, dim=0)
         aggregated_e = torch.cat(all_e, dim=0)
 
-        # Compute loss using aggregated values
-        epoch_loss = self.loss_fn(aggregated_risk_pred, aggregated_y, aggregated_e)
+        # Compute mean loss across all samples in the epoch
+        epoch_loss = torch.stack([batch['loss'] for batch in self.training_step_outputs]).mean()
+        print("The loss is", epoch_loss)
 
         # # Calculate C-index for the epoch
         c_index_epoch = self.c_index(-aggregated_risk_pred, aggregated_y, aggregated_e)
+        print("The c-index is", c_index_epoch)
 
         # Log aggregated loss and C-index for the epoch
         self.mlflow_logger.log_metrics({'train_c_index': c_index_epoch})
@@ -423,20 +430,26 @@ class SurvivalImaging(pl.LightningModule):
         aggregated_e = torch.cat(all_e, dim=0)
 
         # Compute loss using aggregated values
-        epoch_loss = self.loss_fn(aggregated_risk_pred, aggregated_y, aggregated_e)
-        print(epoch_loss)
+        epoch_loss = torch.stack([batch['loss'] for batch in self.validation_step_outputs]).mean()
+        print("The loss is", epoch_loss)
 
-        # # Calculate C-index for the epoch
-        # c_index_epoch = self.c_index(-aggregated_risk_pred, aggregated_y, aggregated_e)
+        # Calculate C-index for the epoch
+        c_index_epoch = self.c_index(-aggregated_risk_pred, aggregated_y, aggregated_e)
 
-        # # Log aggregated loss and C-index for the epoch
-        # self.mlflow_logger.log_metrics({'val_c_index': c_index_epoch})
+        # Log aggregated loss and C-index for the epoch
+        self.mlflow_logger.log_metrics({'val_c_index': c_index_epoch})
         self.mlflow_logger.log_metrics({'val_loss': epoch_loss.item()})
+        # Log aggregated loss and C-index for the epoch
+        self.log('val_loss', epoch_loss.item())
+        self.log('val_c_index', c_index_epoch)
         self.validation_step_outputs.clear()  # free memory
+    
+    def on_train_end(self):
+        mlflow.end_run()
 
 # ---------------------------------------------------------------------------------------------------------------------------------
-max_epochs = 200
-l2_reg = 0
+max_epochs = 100
+l2_reg = 10
 model = SurvivalImaging(l2_reg)
 
 # Start the trainer
