@@ -7,6 +7,7 @@ import h5py
 import pandas as pd
 import numpy as np
 from lifelines import CoxPHFitter
+from lifelines import KaplanMeierFitter
 from lifelines.utils import k_fold_cross_validation
 import matplotlib.pyplot as plt
 
@@ -54,9 +55,13 @@ def load_data_from_h5(filepath):
 
 # 1. I will start with my survival models
 # 1.1 Patients with available images
-filepath = 'my_models/simple_model_all_RFS.h5'
+filepath = 'my_models/simple_model_all_RFS_AGE.h5'
 train_df, test_df, combined_df = load_data_from_h5(filepath)
 print(combined_df)
+
+threshold_value = 8760
+combined_df = combined_df[combined_df['y'] <= threshold_value]
+print(len(combined_df))
 
 # Drop low variance columns
 combined_df = combined_df.dropna()
@@ -91,3 +96,38 @@ confidence_interval = 1.96 * np.std(scores) / np.sqrt(len(scores))
 lower_bound = mean_score - confidence_interval
 upper_bound = mean_score + confidence_interval
 print("95% Confidence Interval:", (lower_bound, upper_bound))
+
+# Voorspel de Progression Risk Scores voor de test dataset met het getrainde CPH-model
+predicted_risk_scores_test = cph.predict_partial_hazard(combined_df.loc['test'])
+
+# Bepaal de Median Progression Risk Score voor de test dataset
+median_progression_risk_score_test = np.median(predicted_risk_scores_test)
+
+# Definieer Low-Risk en High-Risk Groepen op basis van de mediane progressie risico score voor de test dataset
+risk_groups_test = np.where(predicted_risk_scores_test >= median_progression_risk_score_test, 'high-risk', 'low-risk')
+
+# Voeg de risico groepen toe aan de DataFrame voor de test dataset
+combined_df.loc['test', 'risk_group'] = risk_groups_test
+
+# Creëer KaplanMeierFitter object
+kmf = KaplanMeierFitter()
+
+# Fit het model en plot de Kaplan-Meier curve voor low-risk groep op de test dataset
+kmf.fit(combined_df.loc[('test', combined_df['risk_group'] == 'low-risk'), 'y'], 
+        event_observed=combined_df.loc[('test', combined_df['risk_group'] == 'low-risk'), 'e'], 
+        label='Low-Risk')
+ax = kmf.plot()
+
+# Fit het model en plot de Kaplan-Meier curve voor high-risk groep op de test dataset
+kmf.fit(combined_df.loc[('test', combined_df['risk_group'] == 'high-risk'), 'y'], 
+        event_observed=combined_df.loc[('test', combined_df['risk_group'] == 'high-risk'), 'e'], 
+        label='High-Risk')
+kmf.plot(ax=ax)
+
+# Voeg labels en legenda toe
+plt.xlabel('Time')
+plt.ylabel('Survival Probability')
+plt.title('Kaplan-Meier Curve (Simple model RFS)')
+plt.legend()
+plt.show()
+plt.savefig('/trinity/home/r098372/pycox/figures/KM_simple_RFS')

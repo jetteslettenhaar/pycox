@@ -34,6 +34,8 @@ from sklearn.model_selection import KFold
 
 # --------------------------------------------------------------------------------------------------------
 
+print("This is the outcome of model simple all survival AGE")
+
 # Let set up device agnostic code
 device = "cuda" if torch.cuda.is_available() else "cpu"
 
