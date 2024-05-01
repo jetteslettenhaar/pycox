@@ -56,7 +56,7 @@ class SurvivalDataset(Dataset):
         :param threshold_value: (int) threshold value to filter out samples with 'y' values above this threshold
         :param sampling: (str) sampling strategy: "upsampling" or "downsampling"
         '''
-        self.h5_file = 'my_models/clinical_model_all_AGE.h5'  # Default path to .h5 file
+        self.h5_file = 'my_models/simple_model_all_AGE.h5'  # Default path to .h5 file
         # loads data
         self.X, self.e, self.y = self._read_h5_file(is_train)
         # Remove NaN values
@@ -203,7 +203,7 @@ class Survivalmodel(pl.LightningModule):
         self.lr = 0.0001
         self.lr_decay_rate = 0.005
 
-        self.mlflow_logger = MLFlowLogger(experiment_name="TEST_Model_Abstract", run_name="clinical_model_AGE")
+        self.mlflow_logger = MLFlowLogger(experiment_name="Remake_imaging", run_name="simple")
         mlflow.start_run()
         # We want to log everything (using MLflow)
         self.mlflow_logger.log_hyperparams({
@@ -277,8 +277,10 @@ class Survivalmodel(pl.LightningModule):
         risk_pred = self.forward(x)
         loss = self.loss_fn(risk_pred, y, e)
         c_index = self.c_index(-risk_pred, y, e)
-        self.mlflow_logger.log_metrics({'train_c_index': c_index})
-        self.mlflow_logger.log_metrics({'train_loss': loss.item()})
+        # self.mlflow_logger.log_metrics({'train_c_index': c_index})
+        # self.mlflow_logger.log_metrics({'train_loss': loss.item()})
+        self.log('train_loss', loss.item(), on_epoch=True)
+        self.log('train_c_index', c_index, on_epoch=True)
 
         return {'loss': loss, 'c_index': c_index, 'risk_pred': risk_pred, 'y': y, 'e': e}
 
@@ -288,8 +290,10 @@ class Survivalmodel(pl.LightningModule):
         loss = self.loss_fn(risk_pred, y, e)
         c_index = self.c_index(-risk_pred, y, e)
 
-        self.mlflow_logger.log_metrics({'val_c_index': c_index})
-        self.mlflow_logger.log_metrics({'val_loss': loss.item()})
+        # self.mlflow_logger.log_metrics({'val_c_index': c_index})
+        # self.mlflow_logger.log_metrics({'val_loss': loss.item()})
+        self.log('val_loss', loss.item(), on_epoch=True)
+        self.log('val_c_index', c_index, on_epoch=True)
         self.log('val_c_index_objective', c_index, on_epoch=True)
 
         return {'loss': loss, 'c_index': c_index, 'risk_pred': risk_pred, 'y': y, 'e': e}
@@ -345,9 +349,9 @@ if __name__ == "__main__":
 
         # Manually choose hyperparameters
         dim_2 = 99  # Example hyperparameter, you should choose based on prior knowledge or experimentation
-        dim_3 = 37
-        drop = 0.1614665708629756
-        l2_reg = 17.368791105437836
+        dim_3 = 55
+        drop = 0.22541305037492282
+        l2_reg = 13.152435544780317
 
         # Create and train the model with the chosen hyperparameters
         final_model_outer = Survivalmodel(input_dim=int(train_dataset.X.shape[1]), dim_2=dim_2, dim_3=dim_3, drop=drop, l2_reg=l2_reg)
@@ -369,5 +373,5 @@ if __name__ == "__main__":
     lower_bound = avg_test_c_index - conf_interval
     upper_bound = avg_test_c_index + conf_interval
 
-    print(f"Average Test C-index over {outer_k_folds} outer folds (TEST clinical all AGE): {avg_test_c_index}")
+    print(f"Average Test C-index over {outer_k_folds} outer folds (simple): {avg_test_c_index}")
     print(f"95% Confidence Interval: [{lower_bound}, {upper_bound}]")
