@@ -31,6 +31,8 @@ from pytorch_lightning.loggers import MLFlowLogger
 import optuna
 from sklearn.model_selection import KFold
 
+from lifelines import KaplanMeierFitter
+
 
 # --------------------------------------------------------------------------------------------------------
 
@@ -203,7 +205,7 @@ class Survivalmodel(pl.LightningModule):
         self.lr = 0.0001
         self.lr_decay_rate = 0.005
 
-        self.mlflow_logger = MLFlowLogger(experiment_name="Remake_imaging", run_name="simple")
+        self.mlflow_logger = MLFlowLogger(experiment_name="Test_KM", run_name="simple")
         mlflow.start_run()
         # We want to log everything (using MLflow)
         self.mlflow_logger.log_hyperparams({
@@ -375,3 +377,48 @@ if __name__ == "__main__":
 
     print(f"Average Test C-index over {outer_k_folds} outer folds (simple): {avg_test_c_index}")
     print(f"95% Confidence Interval: [{lower_bound}, {upper_bound}]")
+
+    '''
+    Now we are going to make a KM curve based on the division in risk prediction that is made by the model. 
+    '''
+
+    # Obtain risk predictions from the trained model for the test dataset
+    risk_predictions = []
+    for batch in test_dataloader:
+        x = batch['x']
+        risk_pred = final_model_outer(x)
+        risk_predictions.extend(risk_pred.cpu().detach().numpy().flatten())
+
+    # Determine the median progression risk score
+    median_risk_score = np.median(risk_predictions)
+
+    # Split the test dataset into two groups based on the median risk score
+    high_risk_group = []
+    low_risk_group = []
+    for i, risk_pred in enumerate(risk_predictions):
+        if risk_pred >= median_risk_score:
+            high_risk_group.append((test_dataset.y[i], test_dataset.e[i]))
+        else:
+            low_risk_group.append((test_dataset.y[i], test_dataset.e[i]))
+
+    # Calculate survival probabilities for each group using Kaplan-Meier estimator
+    kmf_high = KaplanMeierFitter()
+    kmf_low = KaplanMeierFitter()
+
+    y_high, e_high = zip(*high_risk_group)
+    y_low, e_low = zip(*low_risk_group)
+
+    kmf_high.fit(y_high, e_high, label='High Risk Group')
+    kmf_low.fit(y_low, e_low, label='Low Risk Group')
+
+    # Plot the Kaplan-Meier curve
+    plt.figure(figsize=(10, 6))
+    kmf_high.plot()
+    kmf_low.plot()
+    plt.xlabel('Time')
+    plt.ylabel('Survival Probability')
+    plt.title('Kaplan-Meier Curve for High and Low Risk Groups')
+    plt.legend()
+    plt.grid()
+    plt.show()
+    plt.savefig('/trinity/home/r098372/pycox/figures/KM_DL_simple')

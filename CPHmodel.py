@@ -97,7 +97,7 @@ lower_bound = mean_score - confidence_interval
 upper_bound = mean_score + confidence_interval
 print("95% Confidence Interval:", (lower_bound, upper_bound))
 
-
+# ---------------------------------------------------------------------------------------------------------------------------
 '''
 If we want to make KM plots we also want to run this second part!!!
 '''
@@ -134,5 +134,135 @@ If we want to make KM plots we also want to run this second part!!!
 # plt.ylabel('Survival Probability')
 # plt.title('Kaplan-Meier Curve (Simple model RFS)')
 # plt.legend()
+# plt.grid()
 # plt.show()
-# plt.savefig('/trinity/home/r098372/pycox/figures/KM_simple_RFS')
+# plt.savefig('/trinity/home/r098372/pycox/figures/KM_simple')
+
+# ---------------------------------------------------------------------------------------------------------------------------
+'''
+Now we want to show what happens with the survival when we have different groups (age, tumor size and primary tumor size)
+FIRST WE DO THE SIMPLE MODEL!
+'''
+
+# # Define the age bins and labels
+# age_bins = [0, 50, 65, 80, float('inf')]
+# age_labels = ['Below 50', '50-65', '65-80', 'Above 80']
+
+# # Divide the dataset into age groups
+# combined_df['age_group'] = pd.cut(combined_df['x15'], bins=age_bins, labels=age_labels)
+
+# # Create a figure and axis object
+# fig, ax = plt.subplots(figsize=(10, 6))
+
+# # Creëer KaplanMeierFitter object
+# kmf = KaplanMeierFitter()
+
+# # Loop through each age group
+# for age_group, group_data in combined_df.groupby('age_group'):
+#     kmf.fit(group_data['y'], event_observed=group_data['e'], label=f'Age Group {age_group}')
+#     kmf.plot(ax=ax)
+
+# # Add labels, title, and legend
+# plt.xlabel('Time (days)')
+# plt.xlim(0, 3650)
+# plt.ylabel('Survival Probability')
+# plt.title('Kaplan-Meier Curves for Different Age Groups')
+# plt.legend()
+# plt.grid()
+# plt.show()
+# plt.savefig('/trinity/home/r098372/pycox/figures/KM_different_groups/KM_simple_RFS_age_groups')
+
+# # Now we want to make a histogram of the PRIMTUMSIZE
+# # Create a figure and axis object
+# fig, ax = plt.subplots(figsize=(8, 6))
+
+# # Plot the histogram
+# ax.hist(combined_df['x16'], bins=20, color='skyblue', edgecolor='black')
+
+# # Add labels and title
+# ax.set_xlabel('x16 Values')
+# ax.set_ylabel('Frequency')
+# ax.set_title('Histogram of x16')
+
+# # Show the plot
+# plt.show()
+# plt.savefig('/trinity/home/r098372/pycox/figures/histogramPRIMTUMSIZE')
+
+
+# # Define the age bins and labels
+# size_bins = [0, 50, 100, 150, float('inf')]
+# size_labels = ['Below 50', '50-100', '100-150', 'Above 150']
+
+# # Divide the dataset into size groups
+# combined_df['size_group'] = pd.cut(combined_df['x16'], bins=size_bins, labels=size_labels)
+
+# # Create a figure and axis object
+# fig, ax = plt.subplots(figsize=(10, 6))
+
+# # Creëer KaplanMeierFitter object
+# kmf = KaplanMeierFitter()
+
+# # Loop through each age group
+# for size_group, group_data in combined_df.groupby('size_group'):
+#     kmf.fit(group_data['y'], event_observed=group_data['e'], label=f'Size group {size_group}')
+#     kmf.plot(ax=ax)
+
+# # Add labels, title, and legend
+# plt.xlabel('Time (days)')
+# plt.xlim(0, 3650)
+# plt.ylabel('Survival Probability')
+# plt.title('Kaplan-Meier Curves for Different Primary Tumor Sizes')
+# plt.legend()
+# plt.grid()
+# plt.show()
+# plt.savefig('/trinity/home/r098372/pycox/figures/KM_different_groups/KM_simple_RFS_size_groups')
+
+# ---------------------------------------------------------------------------------------------------------------------------
+'''
+Now we want to show what happens with the survival when we have different groups (age, tumor size and primary tumor size)
+NOW WE DO THE CLINICAL MODEL!
+'''
+
+# Now we want to make a histogram of the PRIMTUMSIZE
+# Create a figure and axis object
+fig, ax = plt.subplots(figsize=(8, 6))
+
+# Plot the histogram
+ax.hist(combined_df['x37'], bins=20, range=(0,60), color='skyblue', edgecolor='black')
+
+# Add labels and title
+ax.set_xlabel('x37 Values')
+ax.set_ylabel('Frequency')
+ax.set_title('Histogram of x37')
+
+# Show the plot
+plt.show()
+plt.savefig('/trinity/home/r098372/pycox/figures/histogramNUMMIT')
+
+# Define the mitoses bins and labels
+mit_bins = [0, 10, 20, 30, float('inf')]
+mit_labels = ['Below 10', '10-20', '20-30', 'Above 30']
+
+# Divide the dataset into size groups
+combined_df['mit_group'] = pd.cut(combined_df['x37'], bins=mit_bins, labels=mit_labels)
+
+# Create a figure and axis object
+fig, ax = plt.subplots(figsize=(10, 6))
+
+# Creëer KaplanMeierFitter object
+kmf = KaplanMeierFitter()
+
+# Loop through each age group
+for mit_group, group_data in combined_df.groupby('mit_group'):
+    kmf.fit(group_data['y'], event_observed=group_data['e'], label=f'Mitoses group {mit_group}')
+    kmf.plot(ax=ax)
+
+# Add labels, title, and legend
+plt.xlabel('Time (days)')
+plt.xlim(0, 3650)
+plt.ylabel('Survival Probability')
+plt.title('Kaplan-Meier Curves for Different Number of Mitoses')
+plt.legend()
+plt.grid()
+plt.show()
+plt.savefig('/trinity/home/r098372/pycox/figures/KM_different_groups/KM_simple_RFS_mit_group')

@@ -287,6 +287,9 @@ class Survivalmodel(pl.LightningModule):
         }
         self.training_step_outputs.append(batch_dictionary)
 
+        # Log batch loss 
+        self.log('train_loss_batch', loss.item())
+
         return batch_dictionary
     
     def on_train_epoch_end(self):
@@ -336,6 +339,9 @@ class Survivalmodel(pl.LightningModule):
         }
         self.validation_step_outputs.append(batch_dictionary)
 
+         # Log batch loss 
+        self.log('val_loss_batch', loss.item())
+
         return batch_dictionary
 
     def on_validation_epoch_end(self):
@@ -375,7 +381,7 @@ class Survivalmodel(pl.LightningModule):
         print(f'Best C-Index: {self.best_c_index:.4f}')
         mlflow.end_run()
 
-max_epochs = 800
+max_epochs = 100
 
 if __name__ == "__main__":
     parser = argparse.ArgumentParser(
@@ -392,8 +398,8 @@ if __name__ == "__main__":
     combined_dataset = torch.utils.data.ConcatDataset([train_dataset, test_dataset])
 
     # Create custom dataloaders
-    train_dataloader = DataLoader(train_dataset, batch_size=2, shuffle=True)
-    test_dataloader = DataLoader(test_dataset, batch_size=2)
+    train_dataloader = DataLoader(train_dataset, batch_size=len(train_dataset), shuffle=True)
+    test_dataloader = DataLoader(test_dataset, batch_size=len(test_dataset))
 
     # Define the number of folds for outer cross-validation
     outer_k_folds = 5
@@ -414,8 +420,8 @@ if __name__ == "__main__":
         test_data_outer = torch.utils.data.Subset(combined_dataset, test_indices)
 
         # Create custom dataloaders for outer fold
-        train_dataloader_outer = DataLoader(train_data_outer, batch_size=2, shuffle=True)
-        test_dataloader_outer = DataLoader(test_data_outer, batch_size=2)
+        train_dataloader_outer = DataLoader(train_data_outer, batch_size=128, shuffle=True)
+        test_dataloader_outer = DataLoader(test_data_outer, batch_size=128)
 
         # Manually choose hyperparameters
         dim_2 = 99  # Example hyperparameter, you should choose based on prior knowledge or experimentation
