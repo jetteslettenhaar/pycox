@@ -56,7 +56,7 @@ class SurvivalDataset(Dataset):
         :param threshold_value: (int) threshold value to filter out samples with 'y' values above this threshold
         :param sampling: (str) sampling strategy: "upsampling" or "downsampling"
         '''
-        self.h5_file = 'my_models/simple_model_all_AGE.h5'  # Default path to .h5 file
+        self.h5_file = 'my_models/simple_model.h5'  # Default path to .h5 file
         # loads data
         self.X, self.e, self.y = self._read_h5_file(is_train)
         # Remove NaN values
@@ -203,7 +203,7 @@ class Survivalmodel(pl.LightningModule):
         self.lr = 0.0001
         self.lr_decay_rate = 0.005
 
-        self.mlflow_logger = MLFlowLogger(experiment_name="Remake_imaging", run_name="BZ_is_one")
+        self.mlflow_logger = MLFlowLogger(experiment_name="Remake_imaging", run_name="Only_imaging_patients")
         mlflow.start_run()
         # We want to log everything (using MLflow)
         self.mlflow_logger.log_hyperparams({
@@ -420,8 +420,8 @@ if __name__ == "__main__":
         test_data_outer = torch.utils.data.Subset(combined_dataset, test_indices)
 
         # Create custom dataloaders for outer fold
-        train_dataloader_outer = DataLoader(train_data_outer, batch_size=128, shuffle=True)
-        test_dataloader_outer = DataLoader(test_data_outer, batch_size=128)
+        train_dataloader_outer = DataLoader(train_data_outer, batch_size=len(train_data_outer), shuffle=True)
+        test_dataloader_outer = DataLoader(test_data_outer, batch_size=len(train_data_outer))
 
         # Manually choose hyperparameters
         dim_2 = 99  # Example hyperparameter, you should choose based on prior knowledge or experimentation

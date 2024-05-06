@@ -32,6 +32,7 @@ import optuna
 from sklearn.model_selection import KFold
 
 from lifelines import KaplanMeierFitter
+import shap
 
 
 # --------------------------------------------------------------------------------------------------------
@@ -422,3 +423,35 @@ if __name__ == "__main__":
     plt.grid()
     plt.show()
     plt.savefig('/trinity/home/r098372/pycox/figures/KM_DL_simple')
+
+    '''
+    We are going to perform a shapley analysis to see what is the most important factor
+    '''
+    # Assuming you have the test dataset available
+    test_features = test_dataset.X
+    print(test_features.shape)
+    test_features_tensor = torch.tensor(test_features, dtype=torch.float32)  # Convert features to PyTorch tensor
+
+    # Step 3: Prepare the Model
+    # Manually choose hyperparameters
+    dim_2 = 99  # Example hyperparameter, you should choose based on prior knowledge or experimentation
+    dim_3 = 55
+    drop = 0.22541305037492282
+    l2_reg = 13.152435544780317
+
+    # Create and train the model with the chosen hyperparameters
+    final_model_shap = Survivalmodel(input_dim=int(train_dataset.X.shape[1]), dim_2=dim_2, dim_3=dim_3, drop=drop, l2_reg=l2_reg)
+    trainer_shap = pl.Trainer(max_epochs=max_epochs, logger=final_model_shap.mlflow_logger, accelerator='gpu', devices=1)
+    trainer_shap.fit(final_model_shap, train_dataloaders=train_dataloader, val_dataloaders=test_dataloader)
+
+    # Set tolerance level
+    shap.explainers._deep.deep_utils.TOLERANCE = 0.1  # Set a higher tolerance level initially
+
+    # Step 4: Compute SHAP Values
+    explainer = shap.DeepExplainer(final_model_shap, test_features_tensor)
+    shap_values = explainer.shap_values(test_features_tensor, check_additivity=False)
+    print(shap_values.shape)
+
+    # Step 5: Visualize SHAP Values
+    shap.summary_plot(shap_values, features=test_features_tensor, plot_type='bar')
+    plt.savefig('/trinity/home/r098372/pycox/figures/shap_summary_plot.png')
