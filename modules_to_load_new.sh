@@ -14,4 +14,4 @@ module load CUDA/11.3.1
 
 source /trinity/home/r098372/pycox/venv_new/bin/activate
 
-python Remake_imaging_model.py
+python Model_jette_noopt.py

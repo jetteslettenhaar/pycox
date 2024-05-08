@@ -19,6 +19,7 @@ from sklearn.utils import resample
 from torch.utils.data import Dataset
 from torch.utils.data import DataLoader
 from lifelines.utils import concordance_index
+from lifelines.plotting import add_at_risk_counts
 
 from sksurv.metrics import brier_score
 from sksurv.metrics import integrated_brier_score
@@ -383,44 +384,78 @@ if __name__ == "__main__":
     Now we are going to make a KM curve based on the division in risk prediction that is made by the model. 
     '''
 
+    # Manually choose hyperparameters
+    dim_2 = 99  # Example hyperparameter, you should choose based on prior knowledge or experimentation
+    dim_3 = 55
+    drop = 0.22541305037492282
+    l2_reg = 13.152435544780317
+
+    # Create and train the model with the chosen hyperparameters
+    final_model_KM = Survivalmodel(input_dim=int(train_dataset.X.shape[1]), dim_2=dim_2, dim_3=dim_3, drop=drop, l2_reg=l2_reg)
+
     # Obtain risk predictions from the trained model for the test dataset
     risk_predictions = []
     for batch in test_dataloader:
-        x = batch['x']
-        risk_pred = final_model_outer(x)
+        x = batch['x'].to(device)
+        risk_pred = final_model_KM(x)
         risk_predictions.extend(risk_pred.cpu().detach().numpy().flatten())
 
-    # Determine the median progression risk score
-    median_risk_score = np.median(risk_predictions)
+    # Determine the percentiles of risk predictions
+    percentile_low = np.percentile(risk_predictions, 25)
+    percentile_high = np.percentile(risk_predictions, 75)
 
-    # Split the test dataset into two groups based on the median risk score
+    # Define thresholds for risk groups
+    threshold_low = percentile_low
+    threshold_high = percentile_high
+
+    # Categorize risk groups
+    risk_groups = np.where(risk_predictions >= threshold_high, 'high-risk',
+                        np.where(risk_predictions <= threshold_low, 'low-risk', 'unknown/intermediate'))
+
+    # Convert time from days to years
+    # test_dataset['y_years'] = test_dataset['y'] / 365.25  # Assuming 365.25 days per year
+
+    # Initialize lists to store survival data for each risk group
     high_risk_group = []
     low_risk_group = []
+
+    # Split the test dataset into high-risk and low-risk groups
     for i, risk_pred in enumerate(risk_predictions):
-        if risk_pred >= median_risk_score:
+        if risk_groups[i] == 'high-risk':
             high_risk_group.append((test_dataset.y[i], test_dataset.e[i]))
-        else:
+        elif risk_groups[i] == 'low-risk':
             low_risk_group.append((test_dataset.y[i], test_dataset.e[i]))
 
-    # Calculate survival probabilities for each group using Kaplan-Meier estimator
+    # Create KaplanMeierFitter objects
     kmf_high = KaplanMeierFitter()
     kmf_low = KaplanMeierFitter()
 
+    # Fit the models for high-risk and low-risk groups
     y_high, e_high = zip(*high_risk_group)
     y_low, e_low = zip(*low_risk_group)
 
     kmf_high.fit(y_high, e_high, label='High Risk Group')
     kmf_low.fit(y_low, e_low, label='Low Risk Group')
 
-    # Plot the Kaplan-Meier curve
-    plt.figure(figsize=(10, 6))
-    kmf_high.plot()
-    kmf_low.plot()
-    plt.xlabel('Time')
-    plt.ylabel('Survival Probability')
-    plt.title('Kaplan-Meier Curve for High and Low Risk Groups')
-    plt.legend()
+    # Plot the Kaplan-Meier curves
+    fig, ax = plt.subplots(figsize=(10, 6))
+    kmf_high.plot(ax=ax, color='red')
+    kmf_low.plot(ax=ax, color='green')
+
+    # Add at-risk counts
+    add_at_risk_counts(kmf_high, kmf_low, ax=ax)
+
+    # Set labels and legend
+    ax.set_xlabel('Time')
+    ax.set_ylabel('Survival Probability')
+    ax.set_title('Kaplan-Meier Curve for High and Low Risk Groups')
+    ax.legend()
+
+    # Set x-axis limit to 10 years (assuming the maximum value is 3650 days)
+    ax.set_xlim(0, 3650)
+
     plt.grid()
+    plt.tight_layout()
     plt.show()
     plt.savefig('/trinity/home/r098372/pycox/figures/KM_DL_simple')
 
@@ -453,5 +488,5 @@ if __name__ == "__main__":
     print(shap_values.shape)
 
     # Step 5: Visualize SHAP Values
-    shap.summary_plot(shap_values, features=test_features_tensor, plot_type='bar')
+    shap.summary_plot(shap_values, features=test_features, plot_type='bar')
     plt.savefig('/trinity/home/r098372/pycox/figures/shap_summary_plot.png')
