@@ -103,79 +103,70 @@ print("95% Confidence Interval:", (lower_bound, upper_bound))
 If we want to make KM plots we also want to run this second part!!!
 '''
 
-# # Voorspel de Progression Risk Scores voor de test dataset met het getrainde CPH-model
-# predicted_risk_scores_test = cph.predict_partial_hazard(combined_df.loc['test'])
+# Voorspel de Progression Risk Scores voor de test dataset met het getrainde CPH-model
+predicted_risk_scores_test = cph.predict_partial_hazard(combined_df.loc['test'])
 
-# # # Now we want to make a histogram of the predicted_risk_scores
-# # # Create a figure and axis object
-# # fig, ax = plt.subplots(figsize=(8, 6))
+# Determine the percentiles of risk predictions
+percentile_low = np.percentile(predicted_risk_scores_test, 25)
+percentile_high = np.percentile(predicted_risk_scores_test, 75)
 
-# # # Plot the histogram
-# # ax.hist(predicted_risk_scores_test, bins=20, color='skyblue', edgecolor='black')
+# Define thresholds for risk groups
+threshold_low = percentile_low
+threshold_high = percentile_high
 
-# # # Add labels and title
-# # ax.set_xlabel('risk score')
-# # ax.set_ylabel('Frequency')
-# # ax.set_title('Histogram of CPH risk scores')
+# Categorize risk groups
+risk_groups = np.where(predicted_risk_scores_test >= threshold_high, 'high-risk',
+                    np.where(predicted_risk_scores_test <= threshold_low, 'low-risk', 'unknown/intermediate'))
 
-# # # Show the plot
-# # plt.show()
-# # plt.savefig('/trinity/home/r098372/pycox/figures/histogram_CPH_risk_score')
+# Initialize lists to store survival data for each risk group
+high_risk_group = []
+low_risk_group = []
 
-# # Convert everything to year
-# combined_df['y_years'] = combined_df['y']/365
+# Split the test dataset into high-risk and low-risk groups
+for i, risk_pred in enumerate(predicted_risk_scores_test):
+    if risk_groups[i] == 'high-risk':
+        high_risk_group.append((combined_df.loc['test'].iloc[i]['y'], combined_df.loc['test'].iloc[i]['e']))
+    elif risk_groups[i] == 'low-risk':
+        low_risk_group.append((combined_df.loc['test'].iloc[i]['y'], combined_df.loc['test'].iloc[i]['e']))
 
-# # Calculate percentiles of predicted risk scores
-# percentile_low = np.percentile(predicted_risk_scores_test, 25)
-# percentile_high = np.percentile(predicted_risk_scores_test, 75)
+# Create KaplanMeierFitter objects
+kmf_high = KaplanMeierFitter()
+kmf_low = KaplanMeierFitter()
 
-# # Define thresholds for risk groups
-# threshold_low = percentile_low
-# threshold_high = percentile_high
+# Fit the models for high-risk and low-risk groups
+y_high, e_high = zip(*high_risk_group)
+y_low, e_low = zip(*low_risk_group)
 
-# # Categorize risk groups
-# risk_groups_test = np.where(predicted_risk_scores_test >= threshold_high, 'high-risk',
-#                             np.where(predicted_risk_scores_test <= threshold_low, 'low-risk', 'unknown/intermediate'))
+# Fit the models for high-risk and low-risk groups
+y_high = np.array(y_high)
+e_high = np.array(e_high)
+y_low = np.array(y_low)
+e_low = np.array(e_low)
 
-# # Voeg de risico groepen toe aan de DataFrame voor de test dataset
-# combined_df.loc['test', 'risk_group'] = risk_groups_test
+kmf_high.fit(y_high/365.5, e_high, label='High Risk Group')
+kmf_low.fit(y_low/365.5, e_low, label='Low Risk Group')
 
-# # Create KaplanMeierFitter objects
-# kmf_low = KaplanMeierFitter()
-# kmf_high = KaplanMeierFitter()
+# Plot the Kaplan-Meier curves
+fig, ax = plt.subplots(figsize=(10, 6))
+kmf_high.plot(ax=ax, color='red')
+kmf_low.plot(ax=ax, color='green')
 
-# # Filter out 'unknown/intermediate' risk group
-# filtered_df = combined_df.loc[combined_df['risk_group'] != 'unknown/intermediate']
+# Add at-risk counts
+add_at_risk_counts(kmf_low, kmf_high, ax=ax)
 
-# # Fit the models for low-risk and high-risk groups
-# kmf_low.fit(filtered_df.loc[filtered_df['risk_group'] == 'low-risk', 'y_years'], 
-#             event_observed=filtered_df.loc[filtered_df['risk_group'] == 'low-risk', 'e'], 
-#             label='Low-Risk')
+# Set labels and legend
+ax.set_xlabel('Time (years)')
+ax.set_ylabel('Survival Probability')
+ax.set_title('Kaplan-Meier Curve RFS')
+ax.legend(loc='lower left', bbox_to_anchor=(0.05, 0.05))
 
-# kmf_high.fit(filtered_df.loc[filtered_df['risk_group'] == 'high-risk', 'y_years'], 
-#              event_observed=filtered_df.loc[filtered_df['risk_group'] == 'high-risk', 'e'], 
-#              label='High-Risk')
+# Set x-axis limit to 10 years
+ax.set_xlim(0, 10)
 
-# # Plot the Kaplan-Meier curves
-# fig, ax = plt.subplots(figsize=(10, 6))
-# kmf_low.plot_survival_function(ax=ax, color='green')
-# kmf_high.plot_survival_function(ax=ax, color='red')
-
-# # Add at-risk counts
-# add_at_risk_counts(kmf_low, kmf_high, ax=ax)
-
-# # Set labels and legend
-# ax.set_xlabel('Time (Years)')
-# ax.set_ylabel('Survival Probability')
-# ax.set_title('Kaplan-Meier Curve Model 2 (RFS)')
-# ax.legend()
-
-# # Set x-axis limit to 3650
-# ax.set_xlim(0, 10)
-
-# plt.tight_layout()
-# plt.show()
-# plt.savefig('/trinity/home/r098372/pycox/figures/KM_CPH_risk/KM_clinical_RFS')
+plt.grid()
+plt.tight_layout()
+plt.show()
+plt.savefig('/trinity/home/r098372/pycox/figures/DSG_figures/KM_CPH_RFS')
 
 # ---------------------------------------------------------------------------------------------------------------------------
 '''
@@ -282,32 +273,32 @@ FIRST WE DO THE SIMPLE MODEL!
 # plt.show()
 # plt.savefig('/trinity/home/r098372/pycox/figures/histogramNUMMIT')
 
-# Define the mitoses bins and labels
-mit_bins = [0, 5, 10, 15, float('inf')]
-mit_labels = ['Below 5', '5-10', '10-15', 'Above 15']
+# # Define the mitoses bins and labels
+# mit_bins = [0, 5, 10, 15, float('inf')]
+# mit_labels = ['Below 5', '5-10', '10-15', 'Above 15']
 
-# Divide the dataset into size groups
-combined_df['mit_group'] = pd.cut(combined_df['x37'], bins=mit_bins, labels=mit_labels)
+# # Divide the dataset into size groups
+# combined_df['mit_group'] = pd.cut(combined_df['x37'], bins=mit_bins, labels=mit_labels)
 
-# We want to use years, not days
-combined_df['y_years'] = combined_df['y']/365
+# # We want to use years, not days
+# combined_df['y_years'] = combined_df['y']/365
 
-# Create a figure and axis object
-fig, ax = plt.subplots(figsize=(10, 6))
+# # Create a figure and axis object
+# fig, ax = plt.subplots(figsize=(10, 6))
 
-# Creëer KaplanMeierFitter object
-kmf = KaplanMeierFitter()
+# # Creëer KaplanMeierFitter object
+# kmf = KaplanMeierFitter()
 
-# Loop through each age group
-for mit_group, group_data in combined_df.groupby('mit_group'):
-    kmf.fit(group_data['y_years'], event_observed=group_data['e'], label=f'Mitoses group {mit_group}')
-    kmf.plot(ax=ax)
+# # Loop through each age group
+# for mit_group, group_data in combined_df.groupby('mit_group'):
+#     kmf.fit(group_data['y_years'], event_observed=group_data['e'], label=f'Mitoses group {mit_group}')
+#     kmf.plot(ax=ax)
 
-# Add labels, title, and legend
-plt.xlabel('Time (years)')
-plt.xlim(0, 10)
-plt.ylabel('Survival Probability')
-plt.title('Kaplan-Meier Curves for Different Number of Mitoses (RFS)')
-plt.legend(loc='lower left', bbox_to_anchor=(0.05, 0.05))
-plt.show()
-plt.savefig('/trinity/home/r098372/pycox/figures/KM_different_groups/KM_simple_RFS_mit_group')
+# # Add labels, title, and legend
+# plt.xlabel('Time (years)')
+# plt.xlim(0, 10)
+# plt.ylabel('Survival Probability')
+# plt.title('Kaplan-Meier Curves for Different Number of Mitoses (RFS)')
+# plt.legend(loc='lower left', bbox_to_anchor=(0.05, 0.05))
+# plt.show()
+# plt.savefig('/trinity/home/r098372/pycox/figures/KM_different_groups/KM_simple_RFS_mit_group')

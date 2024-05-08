@@ -60,7 +60,7 @@ class SurvivalDataset(Dataset):
         :param threshold_value: (int) threshold value to filter out samples with 'y' values above this threshold
         :param sampling: (str) sampling strategy: "upsampling" or "downsampling"
         '''
-        self.h5_file = 'my_models/simple_model_all_AGE.h5'  # Default path to .h5 file
+        self.h5_file = 'my_models/clinical_model_all_RFS_AGE.h5'  # Default path to .h5 file
         # loads data
         self.X, self.e, self.y = self._read_h5_file(is_train)
         # Remove NaN values
@@ -329,66 +329,67 @@ if __name__ == "__main__":
     train_dataloader = DataLoader(train_dataset, batch_size=len(train_dataset), shuffle=True)
     test_dataloader = DataLoader(test_dataset, batch_size=len(test_dataset))
 
-    # Define the number of folds for outer cross-validation
-    outer_k_folds = 5
-    max_epochs = 800
+    # # Define the number of folds for outer cross-validation
+    # outer_k_folds = 5
+    # max_epochs = 800
 
-    # Define outer K-fold cross-validation
-    outer_kfold = KFold(n_splits=outer_k_folds, shuffle=True, random_state=seed)
+    # # Define outer K-fold cross-validation
+    # outer_kfold = KFold(n_splits=outer_k_folds, shuffle=True, random_state=seed)
 
-    best_hyperparams_outer_folds = []
-    test_c_indices_outer_folds = []
+    # best_hyperparams_outer_folds = []
+    # test_c_indices_outer_folds = []
 
-    # Outer cross-validation loop
-    for fold_idx, (train_indices, test_indices) in enumerate(outer_kfold.split(combined_dataset)):
-        print(f"Outer Fold: {fold_idx + 1}/{outer_k_folds}")
+    # # Outer cross-validation loop
+    # for fold_idx, (train_indices, test_indices) in enumerate(outer_kfold.split(combined_dataset)):
+    #     print(f"Outer Fold: {fold_idx + 1}/{outer_k_folds}")
 
-        # Split data into train and test for outer fold
-        train_data_outer = torch.utils.data.Subset(combined_dataset, train_indices)
-        test_data_outer = torch.utils.data.Subset(combined_dataset, test_indices)
+    #     # Split data into train and test for outer fold
+    #     train_data_outer = torch.utils.data.Subset(combined_dataset, train_indices)
+    #     test_data_outer = torch.utils.data.Subset(combined_dataset, test_indices)
 
-        # Create custom dataloaders for outer fold
-        train_dataloader_outer = DataLoader(train_data_outer, batch_size=len(train_data_outer), shuffle=True)
-        test_dataloader_outer = DataLoader(test_data_outer, batch_size=len(test_data_outer))
+    #     # Create custom dataloaders for outer fold
+    #     train_dataloader_outer = DataLoader(train_data_outer, batch_size=len(train_data_outer), shuffle=True)
+    #     test_dataloader_outer = DataLoader(test_data_outer, batch_size=len(test_data_outer))
 
-        # Manually choose hyperparameters
-        dim_2 = 99  # Example hyperparameter, you should choose based on prior knowledge or experimentation
-        dim_3 = 55
-        drop = 0.22541305037492282
-        l2_reg = 13.152435544780317
+    #     # Manually choose hyperparameters
+    #     dim_2 = 99  # Example hyperparameter, you should choose based on prior knowledge or experimentation
+    #     dim_3 = 55
+    #     drop = 0.22541305037492282
+    #     l2_reg = 13.152435544780317
 
-        # Create and train the model with the chosen hyperparameters
-        final_model_outer = Survivalmodel(input_dim=int(train_dataset.X.shape[1]), dim_2=dim_2, dim_3=dim_3, drop=drop, l2_reg=l2_reg)
-        trainer_outer = pl.Trainer(max_epochs=max_epochs, logger=final_model_outer.mlflow_logger, accelerator='gpu', devices=1)
-        trainer_outer.fit(final_model_outer, train_dataloaders=train_dataloader_outer, val_dataloaders=test_dataloader_outer)
+    #     # Create and train the model with the chosen hyperparameters
+    #     final_model_outer = Survivalmodel(input_dim=int(train_dataset.X.shape[1]), dim_2=dim_2, dim_3=dim_3, drop=drop, l2_reg=l2_reg)
+    #     trainer_outer = pl.Trainer(max_epochs=max_epochs, logger=final_model_outer.mlflow_logger, accelerator='gpu', devices=1)
+    #     trainer_outer.fit(final_model_outer, train_dataloaders=train_dataloader_outer, val_dataloaders=test_dataloader_outer)
 
-        # Extract test C-index from the final training loop's metrics
-        test_c_index_outer_fold = trainer_outer.callback_metrics['val_c_index_objective']
-        print(f"Test C-index for Outer Fold {fold_idx + 1}: {test_c_index_outer_fold}")
+    #     # Extract test C-index from the final training loop's metrics
+    #     test_c_index_outer_fold = trainer_outer.callback_metrics['val_c_index_objective']
+    #     print(f"Test C-index for Outer Fold {fold_idx + 1}: {test_c_index_outer_fold}")
 
-        # Store the test C-index for this outer fold
-        test_c_indices_outer_folds.append(test_c_index_outer_fold)
+    #     # Store the test C-index for this outer fold
+    #     test_c_indices_outer_folds.append(test_c_index_outer_fold)
 
-    # Calculate the average test C-index over all outer folds
-    avg_test_c_index = np.mean(test_c_indices_outer_folds)
+    # # Calculate the average test C-index over all outer folds
+    # avg_test_c_index = np.mean(test_c_indices_outer_folds)
 
-    # Calculate 95% confidence interval for the test C-index
-    conf_interval = 1.96 * np.std(test_c_indices_outer_folds) / np.sqrt(len(test_c_indices_outer_folds))
-    lower_bound = avg_test_c_index - conf_interval
-    upper_bound = avg_test_c_index + conf_interval
+    # # Calculate 95% confidence interval for the test C-index
+    # conf_interval = 1.96 * np.std(test_c_indices_outer_folds) / np.sqrt(len(test_c_indices_outer_folds))
+    # lower_bound = avg_test_c_index - conf_interval
+    # upper_bound = avg_test_c_index + conf_interval
 
-    print(f"Average Test C-index over {outer_k_folds} outer folds (simple): {avg_test_c_index}")
-    print(f"95% Confidence Interval: [{lower_bound}, {upper_bound}]")
+    # print(f"Average Test C-index over {outer_k_folds} outer folds (simple): {avg_test_c_index}")
+    # print(f"95% Confidence Interval: [{lower_bound}, {upper_bound}]")
 
     '''
     Now we are going to make a KM curve based on the division in risk prediction that is made by the model. 
     '''
 
     # Manually choose hyperparameters
-    dim_2 = 99  # Example hyperparameter, you should choose based on prior knowledge or experimentation
-    dim_3 = 55
-    drop = 0.22541305037492282
-    l2_reg = 13.152435544780317
+    dim_2 = 100  # Example hyperparameter, you should choose based on prior knowledge or experimentation
+    dim_3 = 67
+    drop = 0.2741697615030259
+    l2_reg = 14.598141727220037
+
 
     # Create and train the model with the chosen hyperparameters
     final_model_KM = Survivalmodel(input_dim=int(train_dataset.X.shape[1]), dim_2=dim_2, dim_3=dim_3, drop=drop, l2_reg=l2_reg)
@@ -434,8 +435,14 @@ if __name__ == "__main__":
     y_high, e_high = zip(*high_risk_group)
     y_low, e_low = zip(*low_risk_group)
 
-    kmf_high.fit(y_high, e_high, label='High Risk Group')
-    kmf_low.fit(y_low, e_low, label='Low Risk Group')
+    # Fit the models for high-risk and low-risk groups
+    y_high = np.array(y_high)
+    e_high = np.array(e_high)
+    y_low = np.array(y_low)
+    e_low = np.array(e_low)
+
+    kmf_high.fit(y_high/365.25, e_high, label='High Risk Group')
+    kmf_low.fit(y_low/365.25, e_low, label='Low Risk Group')
 
     # Plot the Kaplan-Meier curves
     fig, ax = plt.subplots(figsize=(10, 6))
@@ -443,50 +450,51 @@ if __name__ == "__main__":
     kmf_low.plot(ax=ax, color='green')
 
     # Add at-risk counts
-    add_at_risk_counts(kmf_high, kmf_low, ax=ax)
+    add_at_risk_counts(kmf_low, kmf_high, ax=ax)
 
     # Set labels and legend
-    ax.set_xlabel('Time')
+    ax.set_xlabel('Time (years)')
     ax.set_ylabel('Survival Probability')
-    ax.set_title('Kaplan-Meier Curve for High and Low Risk Groups')
-    ax.legend()
+    ax.set_title('Kaplan-Meier Curve RFS')
+    ax.legend(loc='lower left', bbox_to_anchor=(0.05, 0.05))
 
-    # Set x-axis limit to 10 years (assuming the maximum value is 3650 days)
-    ax.set_xlim(0, 3650)
+    # Set x-axis limit to 10 years
+    ax.set_xlim(0, 10)
 
     plt.grid()
     plt.tight_layout()
     plt.show()
-    plt.savefig('/trinity/home/r098372/pycox/figures/KM_DL_simple')
+    plt.savefig('/trinity/home/r098372/pycox/figures/DSG_figures/KM_DL_RFS')
 
-    '''
-    We are going to perform a shapley analysis to see what is the most important factor
-    '''
-    # Assuming you have the test dataset available
-    test_features = test_dataset.X
-    print(test_features.shape)
-    test_features_tensor = torch.tensor(test_features, dtype=torch.float32)  # Convert features to PyTorch tensor
+    # mlflow.end_run()
+    # '''
+    # We are going to perform a shapley analysis to see what is the most important factor
+    # '''
+    # # Assuming you have the test dataset available
+    # test_features = test_dataset.X
+    # print(test_features.shape)
+    # test_features_tensor = torch.tensor(test_features, dtype=torch.float32)  # Convert features to PyTorch tensor
 
-    # Step 3: Prepare the Model
-    # Manually choose hyperparameters
-    dim_2 = 99  # Example hyperparameter, you should choose based on prior knowledge or experimentation
-    dim_3 = 55
-    drop = 0.22541305037492282
-    l2_reg = 13.152435544780317
+    # # Step 3: Prepare the Model
+    # # Manually choose hyperparameters
+    # dim_2 = 99  # Example hyperparameter, you should choose based on prior knowledge or experimentation
+    # dim_3 = 55
+    # drop = 0.22541305037492282
+    # l2_reg = 13.152435544780317
 
-    # Create and train the model with the chosen hyperparameters
-    final_model_shap = Survivalmodel(input_dim=int(train_dataset.X.shape[1]), dim_2=dim_2, dim_3=dim_3, drop=drop, l2_reg=l2_reg)
-    trainer_shap = pl.Trainer(max_epochs=max_epochs, logger=final_model_shap.mlflow_logger, accelerator='gpu', devices=1)
-    trainer_shap.fit(final_model_shap, train_dataloaders=train_dataloader, val_dataloaders=test_dataloader)
+    # # Create and train the model with the chosen hyperparameters
+    # final_model_shap = Survivalmodel(input_dim=int(train_dataset.X.shape[1]), dim_2=dim_2, dim_3=dim_3, drop=drop, l2_reg=l2_reg)
+    # trainer_shap = pl.Trainer(max_epochs=max_epochs, logger=final_model_shap.mlflow_logger, accelerator='gpu', devices=1)
+    # trainer_shap.fit(final_model_shap, train_dataloaders=train_dataloader, val_dataloaders=test_dataloader)
 
-    # Set tolerance level
-    shap.explainers._deep.deep_utils.TOLERANCE = 0.1  # Set a higher tolerance level initially
+    # # Set tolerance level
+    # shap.explainers._deep.deep_utils.TOLERANCE = 0.1  # Set a higher tolerance level initially
 
-    # Step 4: Compute SHAP Values
-    explainer = shap.DeepExplainer(final_model_shap, test_features_tensor)
-    shap_values = explainer.shap_values(test_features_tensor, check_additivity=False)
-    print(shap_values.shape)
+    # # Step 4: Compute SHAP Values
+    # explainer = shap.DeepExplainer(final_model_shap, test_features_tensor)
+    # shap_values = explainer.shap_values(test_features_tensor, check_additivity=False)
+    # print(shap_values.shape)
 
-    # Step 5: Visualize SHAP Values
-    shap.summary_plot(shap_values, features=test_features, plot_type='bar')
-    plt.savefig('/trinity/home/r098372/pycox/figures/shap_summary_plot.png')
+    # # Step 5: Visualize SHAP Values
+    # shap.summary_plot(shap_values, features=test_features, plot_type='bar')
+    # plt.savefig('/trinity/home/r098372/pycox/figures/shap_summary_plot.png')
