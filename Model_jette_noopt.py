@@ -33,6 +33,8 @@ import optuna
 from sklearn.model_selection import KFold
 
 from lifelines import KaplanMeierFitter
+from lifelines.statistics import logrank_test
+
 import shap
 
 
@@ -60,7 +62,7 @@ class SurvivalDataset(Dataset):
         :param threshold_value: (int) threshold value to filter out samples with 'y' values above this threshold
         :param sampling: (str) sampling strategy: "upsampling" or "downsampling"
         '''
-        self.h5_file = 'my_models/clinical_model_all_RFS_AGE.h5'  # Default path to .h5 file
+        self.h5_file = 'my_models/clinical_model_all_AGE.h5'  # Default path to .h5 file
         # loads data
         self.X, self.e, self.y = self._read_h5_file(is_train)
         # Remove NaN values
@@ -390,42 +392,48 @@ if __name__ == "__main__":
     drop = 0.2741697615030259
     l2_reg = 14.598141727220037
 
-
     # Create and train the model with the chosen hyperparameters
     final_model_KM = Survivalmodel(input_dim=int(train_dataset.X.shape[1]), dim_2=dim_2, dim_3=dim_3, drop=drop, l2_reg=l2_reg)
+    trainer_KM = pl.Trainer(max_epochs=max_epochs, logger=final_model_KM.mlflow_logger, accelerator='gpu', devices=1)
+    trainer_KM.fit(final_model_KM, train_dataloaders=train_dataloader, val_dataloaders=test_dataloader)
 
-    # Obtain risk predictions from the trained model for the test dataset
-    risk_predictions = []
+    # Obtain risk predictions from the trained model for the training dataset
+    risk_predictions_train = []
+    final_model_KM.to(device)
+    for batch in train_dataloader:
+        x = batch['x'].to(device)
+        risk_pred_train = final_model_KM(x)
+        risk_predictions_train.extend(risk_pred_train.cpu().detach().numpy().flatten())
+        print(risk_predictions_train)
+
+    # Obtain risk predictions from the trained model for the training dataset
+    risk_predictions_test = []
     for batch in test_dataloader:
         x = batch['x'].to(device)
-        risk_pred = final_model_KM(x)
-        risk_predictions.extend(risk_pred.cpu().detach().numpy().flatten())
+        risk_pred_test = final_model_KM(x)
+        risk_predictions_test.extend(risk_pred_test.cpu().detach().numpy().flatten())
+        print(risk_predictions_test)
 
-    # Determine the percentiles of risk predictions
-    percentile_low = np.percentile(risk_predictions, 25)
-    percentile_high = np.percentile(risk_predictions, 75)
+    # Determine the percentiles of risk predictions on the training set
+    percentile_low_train = np.percentile(risk_predictions_train, 25)
+    percentile_high_train = np.percentile(risk_predictions_train, 75)
 
-    # Define thresholds for risk groups
-    threshold_low = percentile_low
-    threshold_high = percentile_high
-
-    # Categorize risk groups
-    risk_groups = np.where(risk_predictions >= threshold_high, 'high-risk',
-                        np.where(risk_predictions <= threshold_low, 'low-risk', 'unknown/intermediate'))
-
-    # Convert time from days to years
-    # test_dataset['y_years'] = test_dataset['y'] / 365.25  # Assuming 365.25 days per year
+    # Use the percentiles obtained from the training set to categorize the risk groups on the test set
+    risk_groups_test = np.where(risk_predictions_test >= percentile_high_train, 'high-risk',
+                                np.where(risk_predictions_test <= percentile_low_train, 'low-risk', 'unknown/intermediate'))
 
     # Initialize lists to store survival data for each risk group
     high_risk_group = []
     low_risk_group = []
 
     # Split the test dataset into high-risk and low-risk groups
-    for i, risk_pred in enumerate(risk_predictions):
-        if risk_groups[i] == 'high-risk':
-            high_risk_group.append((test_dataset.y[i], test_dataset.e[i]))
-        elif risk_groups[i] == 'low-risk':
-            low_risk_group.append((test_dataset.y[i], test_dataset.e[i]))
+    for i, risk_pred in enumerate(risk_predictions_test):
+        # Ensure that the loop index doesn't exceed the size of the dataset
+        if i < len(test_dataset):
+            if risk_groups_test[i] == 'high-risk':
+                high_risk_group.append((test_dataset.y[i], test_dataset.e[i]))
+            elif risk_groups_test[i] == 'low-risk':
+                low_risk_group.append((test_dataset.y[i], test_dataset.e[i]))
 
     # Create KaplanMeierFitter objects
     kmf_high = KaplanMeierFitter()
@@ -441,6 +449,13 @@ if __name__ == "__main__":
     y_low = np.array(y_low)
     e_low = np.array(e_low)
 
+    
+    # Perform log-rank test
+    results = logrank_test(y_high, y_low, e_high, e_low)
+
+    # Print the results
+    print("Log-rank test p-value:", results.p_value)
+
     kmf_high.fit(y_high/365.25, e_high, label='High Risk Group')
     kmf_low.fit(y_low/365.25, e_low, label='Low Risk Group')
 
@@ -455,16 +470,17 @@ if __name__ == "__main__":
     # Set labels and legend
     ax.set_xlabel('Time (years)')
     ax.set_ylabel('Survival Probability')
-    ax.set_title('Kaplan-Meier Curve RFS')
+    ax.set_title('Kaplan-Meier Curve Deep Learning (Survival)')
     ax.legend(loc='lower left', bbox_to_anchor=(0.05, 0.05))
 
     # Set x-axis limit to 10 years
     ax.set_xlim(0, 10)
+    ax.set_ylim(0.4, 1)
 
     plt.grid()
     plt.tight_layout()
     plt.show()
-    plt.savefig('/trinity/home/r098372/pycox/figures/DSG_figures/KM_DL_RFS')
+    plt.savefig('/trinity/home/r098372/pycox/figures/DSG_figures_2/KM_DL')
 
     # mlflow.end_run()
     # '''

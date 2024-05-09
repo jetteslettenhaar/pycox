@@ -11,6 +11,7 @@ from lifelines import KaplanMeierFitter
 from lifelines.plotting import add_at_risk_counts
 from lifelines.utils import k_fold_cross_validation
 import matplotlib.pyplot as plt
+from lifelines.statistics import logrank_test
 
 # Set manual seed
 seed = 42
@@ -56,7 +57,7 @@ def load_data_from_h5(filepath):
 
 # 1. I will start with my survival models
 # 1.1 Patients with available images
-filepath = 'my_models/clinical_model_all_RFS_AGE.h5'
+filepath = 'my_models/clinical_model_all_AGE.h5'
 train_df, test_df, combined_df = load_data_from_h5(filepath)
 print(combined_df)
 
@@ -105,18 +106,14 @@ If we want to make KM plots we also want to run this second part!!!
 
 # Voorspel de Progression Risk Scores voor de test dataset met het getrainde CPH-model
 predicted_risk_scores_test = cph.predict_partial_hazard(combined_df.loc['test'])
+predicted_risk_scores_train = cph.predict_partial_hazard(combined_df.loc['train'])
 
-# Determine the percentiles of risk predictions
-percentile_low = np.percentile(predicted_risk_scores_test, 25)
-percentile_high = np.percentile(predicted_risk_scores_test, 75)
+percentile_low_train = np.percentile(predicted_risk_scores_train, 25)
+percentile_high_train = np.percentile(predicted_risk_scores_train, 75)
 
-# Define thresholds for risk groups
-threshold_low = percentile_low
-threshold_high = percentile_high
-
-# Categorize risk groups
-risk_groups = np.where(predicted_risk_scores_test >= threshold_high, 'high-risk',
-                    np.where(predicted_risk_scores_test <= threshold_low, 'low-risk', 'unknown/intermediate'))
+# Use the percentiles obtained from the training set to categorize the risk groups on the test set
+risk_groups_test = np.where(predicted_risk_scores_test >= percentile_high_train, 'high-risk',
+                            np.where(predicted_risk_scores_test <= percentile_low_train, 'low-risk', 'unknown/intermediate'))
 
 # Initialize lists to store survival data for each risk group
 high_risk_group = []
@@ -124,9 +121,9 @@ low_risk_group = []
 
 # Split the test dataset into high-risk and low-risk groups
 for i, risk_pred in enumerate(predicted_risk_scores_test):
-    if risk_groups[i] == 'high-risk':
+    if risk_groups_test[i] == 'high-risk':
         high_risk_group.append((combined_df.loc['test'].iloc[i]['y'], combined_df.loc['test'].iloc[i]['e']))
-    elif risk_groups[i] == 'low-risk':
+    elif risk_groups_test[i] == 'low-risk':
         low_risk_group.append((combined_df.loc['test'].iloc[i]['y'], combined_df.loc['test'].iloc[i]['e']))
 
 # Create KaplanMeierFitter objects
@@ -143,6 +140,13 @@ e_high = np.array(e_high)
 y_low = np.array(y_low)
 e_low = np.array(e_low)
 
+# Perform log-rank test
+results = logrank_test(y_high, y_low, e_high, e_low)
+
+# Print the results
+print("Log-rank test p-value:", results.p_value)
+
+
 kmf_high.fit(y_high/365.5, e_high, label='High Risk Group')
 kmf_low.fit(y_low/365.5, e_low, label='Low Risk Group')
 
@@ -157,16 +161,17 @@ add_at_risk_counts(kmf_low, kmf_high, ax=ax)
 # Set labels and legend
 ax.set_xlabel('Time (years)')
 ax.set_ylabel('Survival Probability')
-ax.set_title('Kaplan-Meier Curve RFS')
+ax.set_title('Kaplan-Meier Curve CPH (Survival)')
 ax.legend(loc='lower left', bbox_to_anchor=(0.05, 0.05))
 
 # Set x-axis limit to 10 years
 ax.set_xlim(0, 10)
+ax.set_ylim(0.4, 1)
 
 plt.grid()
 plt.tight_layout()
 plt.show()
-plt.savefig('/trinity/home/r098372/pycox/figures/DSG_figures/KM_CPH_RFS')
+plt.savefig('/trinity/home/r098372/pycox/figures/DSG_figures_2/KM_CPH')
 
 # ---------------------------------------------------------------------------------------------------------------------------
 '''
@@ -198,11 +203,12 @@ FIRST WE DO THE SIMPLE MODEL!
 # # Add labels, title, and legend
 # plt.xlabel('Time (years)')
 # plt.xlim(0, 10)
+# plt.ylim(0.4, 1)
 # plt.ylabel('Survival Probability')
-# plt.title('Kaplan-Meier Curves for Different Age Groups (RFS)')
+# plt.title('Kaplan-Meier Curves for Different Age Groups (Survival)')
 # plt.legend(loc='lower left', bbox_to_anchor=(0.05, 0.05))
 # plt.show()
-# plt.savefig('/trinity/home/r098372/pycox/figures/KM_different_groups/KM_simple_RFS_age_groups')
+# plt.savefig('/trinity/home/r098372/pycox/figures/DSG_figures_2/KM_AGE_survival')
 
 # # Now we want to make a histogram of the PRIMTUMSIZE
 # # Create a figure and axis object
@@ -273,32 +279,33 @@ FIRST WE DO THE SIMPLE MODEL!
 # plt.show()
 # plt.savefig('/trinity/home/r098372/pycox/figures/histogramNUMMIT')
 
-# # Define the mitoses bins and labels
-# mit_bins = [0, 5, 10, 15, float('inf')]
-# mit_labels = ['Below 5', '5-10', '10-15', 'Above 15']
+# Define the mitoses bins and labels
+mit_bins = [0, 5, 10, 15, float('inf')]
+mit_labels = ['Below 5', '5-10', '10-15', 'Above 15']
 
-# # Divide the dataset into size groups
-# combined_df['mit_group'] = pd.cut(combined_df['x37'], bins=mit_bins, labels=mit_labels)
+# Divide the dataset into size groups
+combined_df['mit_group'] = pd.cut(combined_df['x37'], bins=mit_bins, labels=mit_labels)
 
-# # We want to use years, not days
-# combined_df['y_years'] = combined_df['y']/365
+# We want to use years, not days
+combined_df['y_years'] = combined_df['y']/365
 
-# # Create a figure and axis object
-# fig, ax = plt.subplots(figsize=(10, 6))
+# Create a figure and axis object
+fig, ax = plt.subplots(figsize=(10, 6))
 
-# # Creëer KaplanMeierFitter object
-# kmf = KaplanMeierFitter()
+# Creëer KaplanMeierFitter object
+kmf = KaplanMeierFitter()
 
-# # Loop through each age group
-# for mit_group, group_data in combined_df.groupby('mit_group'):
-#     kmf.fit(group_data['y_years'], event_observed=group_data['e'], label=f'Mitoses group {mit_group}')
-#     kmf.plot(ax=ax)
+# Loop through each age group
+for mit_group, group_data in combined_df.groupby('mit_group'):
+    kmf.fit(group_data['y_years'], event_observed=group_data['e'], label=f'Mitotic count {mit_group}')
+    kmf.plot(ax=ax)
 
-# # Add labels, title, and legend
-# plt.xlabel('Time (years)')
-# plt.xlim(0, 10)
-# plt.ylabel('Survival Probability')
-# plt.title('Kaplan-Meier Curves for Different Number of Mitoses (RFS)')
-# plt.legend(loc='lower left', bbox_to_anchor=(0.05, 0.05))
-# plt.show()
-# plt.savefig('/trinity/home/r098372/pycox/figures/KM_different_groups/KM_simple_RFS_mit_group')
+# Add labels, title, and legend
+plt.xlabel('Time (years)')
+plt.xlim(0, 10)
+plt.ylim(0.4, 1)
+plt.ylabel('Survival Probability')
+plt.title('Kaplan-Meier Curves for Different Mitotic Count (Survival)')
+plt.legend(loc='lower left', bbox_to_anchor=(0.05, 0.05))
+plt.show()
+plt.savefig('/trinity/home/r098372/pycox/figures/KM_different_groups/KM_Mit_survival')
