@@ -62,7 +62,7 @@ class SurvivalDataset(Dataset):
         :param threshold_value: (int) threshold value to filter out samples with 'y' values above this threshold
         :param sampling: (str) sampling strategy: "upsampling" or "downsampling"
         '''
-        self.h5_file = 'my_models/clinical_model_all_AGE.h5'  # Default path to .h5 file
+        self.h5_file = 'my_models/simple_model_all_RFS_AGE.h5'  # Default path to .h5 file
         # loads data
         self.X, self.e, self.y = self._read_h5_file(is_train)
         # Remove NaN values
@@ -386,11 +386,10 @@ if __name__ == "__main__":
     Now we are going to make a KM curve based on the division in risk prediction that is made by the model. 
     '''
 
-    # Manually choose hyperparameters
-    dim_2 = 100  # Example hyperparameter, you should choose based on prior knowledge or experimentation
-    dim_3 = 67
-    drop = 0.2741697615030259
-    l2_reg = 14.598141727220037
+    dim_2 = 95  # Example hyperparameter, you should choose based on prior knowledge or experimentation
+    dim_3 = 71
+    drop = 0.18436438636054864
+    l2_reg = 12.795963862534695
 
     # Create and train the model with the chosen hyperparameters
     final_model_KM = Survivalmodel(input_dim=int(train_dataset.X.shape[1]), dim_2=dim_2, dim_3=dim_3, drop=drop, l2_reg=l2_reg)
@@ -470,7 +469,7 @@ if __name__ == "__main__":
     # Set labels and legend
     ax.set_xlabel('Time (years)')
     ax.set_ylabel('Survival Probability')
-    ax.set_title('Kaplan-Meier Curve Deep Learning (Survival)')
+    ax.set_title('Kaplan-Meier Curve Deep Learning Model 1 (RFS)')
     ax.legend(loc='lower left', bbox_to_anchor=(0.05, 0.05))
 
     # Set x-axis limit to 10 years
@@ -480,7 +479,7 @@ if __name__ == "__main__":
     plt.grid()
     plt.tight_layout()
     plt.show()
-    plt.savefig('/trinity/home/r098372/pycox/figures/DSG_figures_2/KM_DL')
+    plt.savefig('/trinity/home/r098372/pycox/figures/Thesis_figures/KM_DL_M1_RFS')
 
     # mlflow.end_run()
     # '''
@@ -509,8 +508,10 @@ if __name__ == "__main__":
     # # Step 4: Compute SHAP Values
     # explainer = shap.DeepExplainer(final_model_shap, test_features_tensor)
     # shap_values = explainer.shap_values(test_features_tensor, check_additivity=False)
+    # shap_values = shap_values.squeeze()
     # print(shap_values.shape)
 
     # # Step 5: Visualize SHAP Values
-    # shap.summary_plot(shap_values, features=test_features, plot_type='bar')
+    # plt.figure()
+    # shap.summary_plot(shap_values, features=test_features)
     # plt.savefig('/trinity/home/r098372/pycox/figures/shap_summary_plot.png')
