@@ -62,112 +62,6 @@ print(labels_RFS)
 # Set manual seed
 seed = 42
 
-# Lets start with loading the data from the models
-
-def load_data_from_h5(filepath):
-    '''
-    This function loads the data from my h5py file. The file contains the following information:
-    X: covariates of the model
-    e: whether the event (death or RFS) occurs? (1: occurs; 0: censored)
-    t/y (t in this .h5 file): the time of event e.
-    '''
-    with h5py.File(filepath, 'r') as f:
-        data = {'train': {}, 'test': {}}
-        for datasets in f:
-            for array in f[datasets]:
-                data[datasets][array] = f[datasets][array][:]
-
-    x_train = data['train']['x']
-    t_train = data['train']['t']
-    e_train = data['train']['e']
-
-    x_test = data['test']['x']
-    t_test = data['test']['t']
-    e_test = data['test']['e']
-
-    columns = ['x' + str(i) for i in range(x_train.shape[1])]
-
-    train_df = (pd.DataFrame(x_train, columns=columns)
-                    .assign(y=t_train)
-                    .assign(e=e_train))
-
-    test_df = (pd.DataFrame(x_test, columns=columns)
-                   .assign(y=t_test)
-                   .assign(e=e_test))
-
-    # Combine train and test DataFrames
-    combined_df = pd.concat([train_df, test_df], keys=['train', 'test'], names=['dataset'])
-
-    return train_df, test_df, combined_df
-
-
-# 1. I will start with my survival models
-# 1.1 Patients with available images
-filepath = 'my_models/clinical_model_AGE_ID.h5'
-train_df, test_df, combined_df = load_data_from_h5(filepath)
-print(combined_df)
-
-
-threshold_value = 8760
-combined_df = combined_df[combined_df['y'] <= threshold_value]
-print(len(combined_df))
-
-# Drop low variance columns
-combined_df = combined_df.dropna()
-threshold = 0.01  # Adjust the threshold as needed
-variances = combined_df.var()
-low_variance_columns = variances[variances < threshold].index
-combined_df = combined_df.drop(columns=low_variance_columns)
-print(combined_df)
-
-# We need to do this since we do not want to select x27 (participant_id)
-features_all = combined_df[['x0', 'x1', 'x2', 'x3', 'x4', 'x5', 'x6', 'x7', 'x8', 'x9', 'x10', 'x11', 'x12', 'x13', 'x14', 'x15', 'x16', 'x19', 'x20', 'x21', 'x23', 'x28', 'x29', 'x30', 'x31','x32', 'y', 'e']]
-
-cph = CoxPHFitter(penalizer=0.001)
-cph.fit(features_all, duration_col='y', event_col='e')
-
-# Voorspel de Progression Risk Scores voor de test dataset met het getrainde CPH-model
-predicted_risk_scores_all = cph.predict_partial_hazard(features_all)
-
-# These percentages are based on the clinical_model_all_AGE.h5 and then CPH model
-percentile_low_train = 0.6960027332848805
-percentile_high_train = 1.4773623788032753
-
-# Use the percentiles obtained from the training set to categorize the risk groups on the test set
-risk_groups_all = np.where(predicted_risk_scores_all >= percentile_high_train, 'high-risk',
-                            np.where(predicted_risk_scores_all <= percentile_low_train, 'low-risk', 'intermediate-risk'))
-
-# Initialize lists to store participant_id for each risk group
-high_risk_group = {'participant_id': [], 'survival_data': []}
-low_risk_group = {'participant_id': [], 'survival_data': []}
-intermediate_risk_group = {'participant_id': [], 'survival_data': []}
-
-# Split the dataset into high-risk, low-risk, and intermediate-risk groups
-for i, risk_pred in enumerate(predicted_risk_scores_all):
-    participant_id = combined_df.iloc[i]['x27']
-    if risk_groups_all[i] == 'high-risk':
-        high_risk_group['participant_id'].append(participant_id)
-        high_risk_group['survival_data'].append((combined_df.iloc[i]['y'], combined_df.iloc[i]['e']))
-    elif risk_groups_all[i] == 'low-risk':
-        low_risk_group['participant_id'].append(participant_id)
-        low_risk_group['survival_data'].append((combined_df.iloc[i]['y'], combined_df.iloc[i]['e']))
-    else:
-        intermediate_risk_group['participant_id'].append(participant_id)
-        intermediate_risk_group['survival_data'].append((combined_df.iloc[i]['y'], combined_df.iloc[i]['e']))
-
-
-# Nu heb je de 'participant_id' in de resulterende groepen 'low-risk', 'high-risk' en 'intermediate-risk'
-print("Low Risk Group:")
-print(low_risk_group['participant_id'])
-print("High Risk Group:")
-print(high_risk_group['participant_id'])
-print("Intermediate Risk Group:")
-print(intermediate_risk_group['participant_id'])
-
-low_risk_group['participant_id'] = [str(id_) for id_ in low_risk_group['participant_id']]
-intermediate_risk_group['participant_id'] = [str(id_) for id_ in intermediate_risk_group['participant_id']]
-high_risk_group['participant_id'] = [str(id_) for id_ in high_risk_group['participant_id']]
-
 # Lets make a dictionary of the subject, imagepath, duration and event!
 image_path = '/data/scratch/r098372/beelden'
 
@@ -182,7 +76,7 @@ for subject_name in os.listdir(image_path):
         # Convert the subject_series to a DataFrame with the same column name as labels_death
         subject_df = pd.DataFrame({'participant_id': subject_series})
         # Use str.replace on the subject_series to remove leading zeroes
-        subject_info = labels_death.merge(subject_df, on='participant_id', how='inner')
+        subject_info = labels_RFS.merge(subject_df, on='participant_id', how='inner')
         print(subject_info)
 
         # Check if the 'NIFTI' directory exists for the current subject
@@ -202,45 +96,39 @@ for subject_name in os.listdir(image_path):
     patient_dict = {
         'name': subject_name,
         'img': nifti_path,
-        'duration': subject_info['Duration_death'].values[0],
-        'event': subject_info['Event_death'].values[0]
+        'duration': subject_info['Duration_RFS'].values[0],
+        'event': subject_info['Event_RFS'].values[0]
     }
 
     # Append this all to a list
-    patient_info_list.append(patient_dict)                        # NORMALLY DO THIS!!!!!
+    patient_info_list.append(patient_dict)                      
 
 # Initialize risk groups dictionary
-risk_groups = {'low-risk': 0, 'intermediate-risk': 1, 'high-risk': 2}
+risk_groups = {'low-risk': 0, 'high-risk': 1}
 
 # Print the list of patient dictionaries
 for patient_dict in patient_info_list:
-    # Split the name string using underscore as a delimiter
-    name_parts = patient_dict['name'].split('_')
-    name_parts[1] = name_parts[1].lstrip('0')
-    patient_dict['name'] = ''.join(name_parts)
-    # patient_dict['name'] = patient_dict['name'].replace('_', '') + '.0'
-    patient_dict['name'] = patient_dict['name'] + '.0'
     patient_dict['duration'] = patient_dict['duration'].astype(float)
     patient_dict['event'] = patient_dict['event'].astype(float)
-
-    # Get participant_id
-    participant_id = patient_dict['name']
-    participant_id = str(participant_id)
     # Initialize risk group
     risk_group = None
     # Check which risk group the participant belongs to
-    if participant_id in low_risk_group['participant_id']:
+    if patient_dict['duration'] > 1825 and patient_dict['event'] == 0.0: 
         risk_group = 'low-risk'
-    elif participant_id in intermediate_risk_group['participant_id']:
-        risk_group = 'intermediate-risk'
-    elif participant_id in high_risk_group['participant_id']:
+    elif patient_dict['duration'] < 1825 and patient_dict['event'] == 1.0:
         risk_group = 'high-risk'
     
     # Add risk_group to patient_dict
     patient_dict['risk_group'] = risk_groups.get(risk_group, -1)  # Use .get() to handle cases where risk_group is not found
+
+# Filteren op rows waar risk_group niet gelijk is aan -1
+patient_info_list_filtered = [patient_dict for patient_dict in patient_info_list if patient_dict['risk_group'] != -1]
+
+# Afdrukken van de gefilterde lijst van patiënten
+for patient_dict in patient_info_list_filtered:
     print(patient_dict)
 
-print(len(patient_info_list))
+print(len(patient_info_list_filtered))
 
 # Let set up device agnostic code
 device = "cuda" if torch.cuda.is_available() else "cpu"
@@ -263,7 +151,7 @@ class SurvivalImaging(pl.LightningModule):
         self.model = Densenet121(
             spatial_dims=3,
             in_channels=1,
-            out_channels=3
+            out_channels=2
         )
         self.model.to(device)
         self.lr = 0.01
@@ -282,7 +170,7 @@ class SurvivalImaging(pl.LightningModule):
         return self.model(x)
 
     def prepare_data(self):
-        data_dict = patient_info_list[:10]
+        data_dict = patient_info_list_filtered[:10]
         train_files, val_files = train_test_split(data_dict, test_size=0.2, random_state=42)
 
         # Set the seed again?
@@ -403,7 +291,9 @@ class SurvivalImaging(pl.LightningModule):
             all_labels.extend(output['labels'].cpu().numpy())
 
         all_predictions = np.array(all_predictions)
+        print(all_predictions)
         all_labels = np.array(all_labels)
+        print(all_labels)
 
         # Calculate accuracy
         accuracy = self.accuracy_fn(all_labels, all_predictions)
@@ -423,8 +313,8 @@ trainer = pl.Trainer(
     logger = model.mlflow_logger,
     accelerator = 'gpu',
     devices = 1,
+    accumulate_grad_batches=2,
 )
-# check_val_every_n_epoch
 
 trainer.fit(model)
 

@@ -57,7 +57,7 @@ def load_data_from_h5(filepath):
 
 # 1. I will start with my survival models
 # 1.1 Patients with available images
-filepath = 'my_models/simple_model_all_RFS_AGE.h5'
+filepath = 'my_models/clinical_model_all_AGE.h5'
 train_df, test_df, combined_df = load_data_from_h5(filepath)
 print(combined_df)
 
@@ -110,6 +110,8 @@ predicted_risk_scores_train = cph.predict_partial_hazard(combined_df.loc['train'
 
 percentile_low_train = np.percentile(predicted_risk_scores_train, 25)
 percentile_high_train = np.percentile(predicted_risk_scores_train, 75)
+print(percentile_low_train)
+print(percentile_high_train)
 
 # Use the percentiles obtained from the training set to categorize the risk groups on the test set
 risk_groups_test = np.where(predicted_risk_scores_test >= percentile_high_train, 'high-risk',
