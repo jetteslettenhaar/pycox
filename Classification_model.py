@@ -154,23 +154,21 @@ class SurvivalImaging(pl.LightningModule):
             out_channels=2
         )
         self.model.to(device)
-        self.lr = 0.01
-        self.lr_decay_rate = 0.005
+        self.lr = 0.00001
         self.loss_function = nn.CrossEntropyLoss()
         self.validation_step_outputs = []
 
-        self.mlflow_logger = MLFlowLogger(experiment_name="classification_model", run_name="run_1")
+        self.mlflow_logger = MLFlowLogger(experiment_name="classification_model", run_name="all_patients")
         mlflow.start_run()
         self.mlflow_logger.log_hyperparams({
-            'lr': self.lr,
-            'lr_decay_rate': self.lr_decay_rate
+            'lr': self.lr
         })
 
     def forward(self, x):
         return self.model(x)
 
     def prepare_data(self):
-        data_dict = patient_info_list_filtered[:10]
+        data_dict = patient_info_list_filtered
         train_files, val_files = train_test_split(data_dict, test_size=0.2, random_state=42)
 
         # Set the seed again?
@@ -246,13 +244,7 @@ class SurvivalImaging(pl.LightningModule):
     
     def configure_optimizers(self):
         optimizer = torch.optim.Adam(self.parameters(), lr=self.lr)        # Learning rate is hyperparameter! (normal is 0.001)
-
-        def lr_lambda(epoch):
-            lr_decay_rate = self.lr_decay_rate                          # Learning rate decay is a hyperparameter! (normal is 0.1)
-            return 1 / (1 + epoch * lr_decay_rate)                      # Inverse time decay function using epoch like in DeepSurv
-
-        scheduler = torch.optim.lr_scheduler.LambdaLR(optimizer, lr_lambda=lr_lambda)
-        return [optimizer], [scheduler]
+        return optimizer
 
     def accuracy_fn(self, y_true, y_pred):
         # Convert NumPy arrays to PyTorch tensors
@@ -298,13 +290,14 @@ class SurvivalImaging(pl.LightningModule):
         # Calculate accuracy
         accuracy = self.accuracy_fn(all_labels, all_predictions)
         self.log('accuracy', accuracy, on_epoch=True)
+        self.validation_step_outputs.clear()
         
     def on_train_end(self):
         mlflow.end_run()
 
 
 # # ---------------------------------------------------------------------------------------------------------------------------------
-max_epochs = 10
+max_epochs = 100
 model = SurvivalImaging()
 
 # Start the trainer

@@ -62,7 +62,7 @@ class SurvivalDataset(Dataset):
         :param threshold_value: (int) threshold value to filter out samples with 'y' values above this threshold
         :param sampling: (str) sampling strategy: "upsampling" or "downsampling"
         '''
-        self.h5_file = 'my_models/simple_model_all_RFS_AGE.h5'  # Default path to .h5 file
+        self.h5_file = 'my_models/clinical_model_all_RFS_AGE.h5'  # Default path to .h5 file
         # loads data
         self.X, self.e, self.y = self._read_h5_file(is_train)
         # Remove NaN values
@@ -209,7 +209,7 @@ class Survivalmodel(pl.LightningModule):
         self.lr = 0.0001
         self.lr_decay_rate = 0.005
 
-        self.mlflow_logger = MLFlowLogger(experiment_name="Test_KM", run_name="simple")
+        self.mlflow_logger = MLFlowLogger(experiment_name="Shapley", run_name="test_simple")
         mlflow.start_run()
         # We want to log everything (using MLflow)
         self.mlflow_logger.log_hyperparams({
@@ -386,132 +386,130 @@ if __name__ == "__main__":
     Now we are going to make a KM curve based on the division in risk prediction that is made by the model. 
     '''
 
-    dim_2 = 95  # Example hyperparameter, you should choose based on prior knowledge or experimentation
-    dim_3 = 71
-    drop = 0.18436438636054864
-    l2_reg = 12.795963862534695
-
-    # Create and train the model with the chosen hyperparameters
-    final_model_KM = Survivalmodel(input_dim=int(train_dataset.X.shape[1]), dim_2=dim_2, dim_3=dim_3, drop=drop, l2_reg=l2_reg)
-    trainer_KM = pl.Trainer(max_epochs=max_epochs, logger=final_model_KM.mlflow_logger, accelerator='gpu', devices=1)
-    trainer_KM.fit(final_model_KM, train_dataloaders=train_dataloader, val_dataloaders=test_dataloader)
-
-    # Obtain risk predictions from the trained model for the training dataset
-    risk_predictions_train = []
-    final_model_KM.to(device)
-    for batch in train_dataloader:
-        x = batch['x'].to(device)
-        risk_pred_train = final_model_KM(x)
-        risk_predictions_train.extend(risk_pred_train.cpu().detach().numpy().flatten())
-        print(risk_predictions_train)
-
-    # Obtain risk predictions from the trained model for the training dataset
-    risk_predictions_test = []
-    for batch in test_dataloader:
-        x = batch['x'].to(device)
-        risk_pred_test = final_model_KM(x)
-        risk_predictions_test.extend(risk_pred_test.cpu().detach().numpy().flatten())
-        print(risk_predictions_test)
-
-    # Determine the percentiles of risk predictions on the training set
-    percentile_low_train = np.percentile(risk_predictions_train, 25)
-    percentile_high_train = np.percentile(risk_predictions_train, 75)
-
-    # Use the percentiles obtained from the training set to categorize the risk groups on the test set
-    risk_groups_test = np.where(risk_predictions_test >= percentile_high_train, 'high-risk',
-                                np.where(risk_predictions_test <= percentile_low_train, 'low-risk', 'unknown/intermediate'))
-
-    # Initialize lists to store survival data for each risk group
-    high_risk_group = []
-    low_risk_group = []
-
-    # Split the test dataset into high-risk and low-risk groups
-    for i, risk_pred in enumerate(risk_predictions_test):
-        # Ensure that the loop index doesn't exceed the size of the dataset
-        if i < len(test_dataset):
-            if risk_groups_test[i] == 'high-risk':
-                high_risk_group.append((test_dataset.y[i], test_dataset.e[i]))
-            elif risk_groups_test[i] == 'low-risk':
-                low_risk_group.append((test_dataset.y[i], test_dataset.e[i]))
-
-    # Create KaplanMeierFitter objects
-    kmf_high = KaplanMeierFitter()
-    kmf_low = KaplanMeierFitter()
-
-    # Fit the models for high-risk and low-risk groups
-    y_high, e_high = zip(*high_risk_group)
-    y_low, e_low = zip(*low_risk_group)
-
-    # Fit the models for high-risk and low-risk groups
-    y_high = np.array(y_high)
-    e_high = np.array(e_high)
-    y_low = np.array(y_low)
-    e_low = np.array(e_low)
-
-    
-    # Perform log-rank test
-    results = logrank_test(y_high, y_low, e_high, e_low)
-
-    # Print the results
-    print("Log-rank test p-value:", results.p_value)
-
-    kmf_high.fit(y_high/365.25, e_high, label='High Risk Group')
-    kmf_low.fit(y_low/365.25, e_low, label='Low Risk Group')
-
-    # Plot the Kaplan-Meier curves
-    fig, ax = plt.subplots(figsize=(10, 6))
-    kmf_high.plot(ax=ax, color='red')
-    kmf_low.plot(ax=ax, color='green')
-
-    # Add at-risk counts
-    add_at_risk_counts(kmf_low, kmf_high, ax=ax)
-
-    # Set labels and legend
-    ax.set_xlabel('Time (years)')
-    ax.set_ylabel('Survival Probability')
-    ax.set_title('Kaplan-Meier Curve Deep Learning Model 1 (RFS)')
-    ax.legend(loc='lower left', bbox_to_anchor=(0.05, 0.05))
-
-    # Set x-axis limit to 10 years
-    ax.set_xlim(0, 10)
-    ax.set_ylim(0.4, 1)
-
-    plt.grid()
-    plt.tight_layout()
-    plt.show()
-    plt.savefig('/trinity/home/r098372/pycox/figures/Thesis_figures/KM_DL_M1_RFS')
-
-    # mlflow.end_run()
-    # '''
-    # We are going to perform a shapley analysis to see what is the most important factor
-    # '''
-    # # Assuming you have the test dataset available
-    # test_features = test_dataset.X
-    # print(test_features.shape)
-    # test_features_tensor = torch.tensor(test_features, dtype=torch.float32)  # Convert features to PyTorch tensor
-
-    # # Step 3: Prepare the Model
-    # # Manually choose hyperparameters
-    # dim_2 = 99  # Example hyperparameter, you should choose based on prior knowledge or experimentation
-    # dim_3 = 55
-    # drop = 0.22541305037492282
-    # l2_reg = 13.152435544780317
+    # dim_2 = 95  # Example hyperparameter, you should choose based on prior knowledge or experimentation
+    # dim_3 = 71
+    # drop = 0.18436438636054864
+    # l2_reg = 12.795963862534695
 
     # # Create and train the model with the chosen hyperparameters
-    # final_model_shap = Survivalmodel(input_dim=int(train_dataset.X.shape[1]), dim_2=dim_2, dim_3=dim_3, drop=drop, l2_reg=l2_reg)
-    # trainer_shap = pl.Trainer(max_epochs=max_epochs, logger=final_model_shap.mlflow_logger, accelerator='gpu', devices=1)
-    # trainer_shap.fit(final_model_shap, train_dataloaders=train_dataloader, val_dataloaders=test_dataloader)
+    # final_model_KM = Survivalmodel(input_dim=int(train_dataset.X.shape[1]), dim_2=dim_2, dim_3=dim_3, drop=drop, l2_reg=l2_reg)
+    # trainer_KM = pl.Trainer(max_epochs=max_epochs, logger=final_model_KM.mlflow_logger, accelerator='gpu', devices=1)
+    # trainer_KM.fit(final_model_KM, train_dataloaders=train_dataloader, val_dataloaders=test_dataloader)
 
-    # # Set tolerance level
-    # shap.explainers._deep.deep_utils.TOLERANCE = 0.1  # Set a higher tolerance level initially
+    # # Obtain risk predictions from the trained model for the training dataset
+    # risk_predictions_train = []
+    # final_model_KM.to(device)
+    # for batch in train_dataloader:
+    #     x = batch['x'].to(device)
+    #     risk_pred_train = final_model_KM(x)
+    #     risk_predictions_train.extend(risk_pred_train.cpu().detach().numpy().flatten())
+    #     print(risk_predictions_train)
 
-    # # Step 4: Compute SHAP Values
-    # explainer = shap.DeepExplainer(final_model_shap, test_features_tensor)
-    # shap_values = explainer.shap_values(test_features_tensor, check_additivity=False)
-    # shap_values = shap_values.squeeze()
-    # print(shap_values.shape)
+    # # Obtain risk predictions from the trained model for the training dataset
+    # risk_predictions_test = []
+    # for batch in test_dataloader:
+    #     x = batch['x'].to(device)
+    #     risk_pred_test = final_model_KM(x)
+    #     risk_predictions_test.extend(risk_pred_test.cpu().detach().numpy().flatten())
+    #     print(risk_predictions_test)
 
-    # # Step 5: Visualize SHAP Values
-    # plt.figure()
-    # shap.summary_plot(shap_values, features=test_features)
-    # plt.savefig('/trinity/home/r098372/pycox/figures/shap_summary_plot.png')
+    # # Determine the percentiles of risk predictions on the training set
+    # percentile_low_train = np.percentile(risk_predictions_train, 25)
+    # percentile_high_train = np.percentile(risk_predictions_train, 75)
+
+    # # Use the percentiles obtained from the training set to categorize the risk groups on the test set
+    # risk_groups_test = np.where(risk_predictions_test >= percentile_high_train, 'high-risk',
+    #                             np.where(risk_predictions_test <= percentile_low_train, 'low-risk', 'unknown/intermediate'))
+
+    # # Initialize lists to store survival data for each risk group
+    # high_risk_group = []
+    # low_risk_group = []
+
+    # # Split the test dataset into high-risk and low-risk groups
+    # for i, risk_pred in enumerate(risk_predictions_test):
+    #     # Ensure that the loop index doesn't exceed the size of the dataset
+    #     if i < len(test_dataset):
+    #         if risk_groups_test[i] == 'high-risk':
+    #             high_risk_group.append((test_dataset.y[i], test_dataset.e[i]))
+    #         elif risk_groups_test[i] == 'low-risk':
+    #             low_risk_group.append((test_dataset.y[i], test_dataset.e[i]))
+
+    # # Create KaplanMeierFitter objects
+    # kmf_high = KaplanMeierFitter()
+    # kmf_low = KaplanMeierFitter()
+
+    # # Fit the models for high-risk and low-risk groups
+    # y_high, e_high = zip(*high_risk_group)
+    # y_low, e_low = zip(*low_risk_group)
+
+    # # Fit the models for high-risk and low-risk groups
+    # y_high = np.array(y_high)
+    # e_high = np.array(e_high)
+    # y_low = np.array(y_low)
+    # e_low = np.array(e_low)
+
+    
+    # # Perform log-rank test
+    # results = logrank_test(y_high, y_low, e_high, e_low)
+
+    # # Print the results
+    # print("Log-rank test p-value:", results.p_value)
+
+    # kmf_high.fit(y_high/365.25, e_high, label='High Risk Group')
+    # kmf_low.fit(y_low/365.25, e_low, label='Low Risk Group')
+
+    # # Plot the Kaplan-Meier curves
+    # fig, ax = plt.subplots(figsize=(10, 6))
+    # kmf_high.plot(ax=ax, color='red')
+    # kmf_low.plot(ax=ax, color='green')
+
+    # # Add at-risk counts
+    # add_at_risk_counts(kmf_low, kmf_high, ax=ax)
+
+    # # Set labels and legend
+    # ax.set_xlabel('Time (years)')
+    # ax.set_ylabel('Survival Probability')
+    # ax.set_title('Kaplan-Meier Curve Deep Learning Model 1 (RFS)')
+    # ax.legend(loc='lower left', bbox_to_anchor=(0.05, 0.05))
+
+    # # Set x-axis limit to 10 years
+    # ax.set_xlim(0, 10)
+    # ax.set_ylim(0.4, 1)
+
+    # plt.grid()
+    # plt.tight_layout()
+    # plt.show()
+    # plt.savefig('/trinity/home/r098372/pycox/figures/Thesis_figures/KM_DL_M1_RFS')
+
+    '''
+    We are going to perform a shapley analysis to see what is the most important factor
+    '''
+    # Assuming you have the test dataset available
+    test_features = test_dataset.X
+    print(test_features.shape)
+    test_features_tensor = torch.tensor(test_features, dtype=torch.float32)  # Convert features to PyTorch tensor
+
+    # Step 3: Prepare the Model
+    # Manually choose hyperparameters
+    dim_2 = 100  # Example hyperparameter, you should choose based on prior knowledge or experimentation
+    dim_3 = 67
+    drop = 0.2741697615030259
+    l2_reg = 14.598141727220037
+
+    # Create and train the model with the chosen hyperparameters
+    final_model_shap = Survivalmodel(input_dim=int(train_dataset.X.shape[1]), dim_2=dim_2, dim_3=dim_3, drop=drop, l2_reg=l2_reg)
+    trainer_shap = pl.Trainer(max_epochs=max_epochs, logger=final_model_shap.mlflow_logger, accelerator='gpu', devices=1)
+    trainer_shap.fit(final_model_shap, train_dataloaders=train_dataloader, val_dataloaders=test_dataloader)
+
+    # Step 4: Compute SHAP Values
+    explainer = shap.DeepExplainer(final_model_shap, test_features_tensor)
+    shap_values = explainer.shap_values(test_features_tensor, check_additivity=False)
+    shap_values = shap_values.squeeze()
+    print(shap_values.shape)
+
+    # Step 5: Visualize SHAP Values
+    feature_names_simple = ['Gender_uknown', 'Female', 'Male', 'Location_Colon', 'Location_Duodenal','Location_Esophagus','Location_Gastric','Location_other', 'Location_Rectum','Location_SmallBowel', 'Tumstat_diag_other', 'Tumstat_diag_localized', 'Tumstat_diag_advanced', 'Tumstat_diag_Meta', 'Tumstat_diag_other_2','Age', 'Primary_tumor_size','Largest_meta','Number_meta']
+    feature_names_clinical = ['Gender_uknown', 'Female', 'Male', 'Location_Colon', 'Location_Duodenal','Location_Esophagus','Location_Gastric','Location_other', 'Location_Rectum','Location_SmallBowel', 'Tumstat_diag_other', 'Tumstat_diag_localized', 'Tumstat_diag_advanced', 'Tumstat_diag_Meta', 'Tumstat_diag_other_2','Epitheloid_cell', 'Mixed_type', 'Spindle_cell', 'Negative_IHCD', 'Positive_IHCD', 'Negative_DOG','Positive_DOG', 'KIT_absent', 'KIT_present', 'Exon_11','Exon_13','Exon_17','Exon_9', 'No_Exon_Location', 'KIT2_no', 'KIT2_yes', 'BRAF_absent', 'BRAF_present', 'Age', 'Primary_tumor_size','Largest_meta','Number_meta','Mitotic_count']
+    plt.figure()
+    shap.summary_plot(shap_values, features=test_features, feature_names=feature_names_clinical, max_display=10)
+    plt.savefig('/trinity/home/r098372/pycox/figures/Shapley_analysis/clinical_RFS_2.png')
