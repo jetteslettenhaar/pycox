@@ -62,7 +62,7 @@ class SurvivalDataset(Dataset):
         :param threshold_value: (int) threshold value to filter out samples with 'y' values above this threshold
         :param sampling: (str) sampling strategy: "upsampling" or "downsampling"
         '''
-        self.h5_file = 'my_models/clinical_model_all_RFS_AGE.h5'  # Default path to .h5 file
+        self.h5_file = 'my_models/simple_model_all_AGE.h5'  # Default path to .h5 file
         # loads data
         self.X, self.e, self.y = self._read_h5_file(is_train)
         # Remove NaN values
@@ -491,10 +491,10 @@ if __name__ == "__main__":
 
     # Step 3: Prepare the Model
     # Manually choose hyperparameters
-    dim_2 = 100  # Example hyperparameter, you should choose based on prior knowledge or experimentation
-    dim_3 = 67
-    drop = 0.2741697615030259
-    l2_reg = 14.598141727220037
+    dim_2 = 99  # Example hyperparameter, you should choose based on prior knowledge or experimentation
+    dim_3 = 55
+    drop = 0.22541305037492282
+    l2_reg = 13.152435544780317
 
     # Create and train the model with the chosen hyperparameters
     final_model_shap = Survivalmodel(input_dim=int(train_dataset.X.shape[1]), dim_2=dim_2, dim_3=dim_3, drop=drop, l2_reg=l2_reg)
@@ -511,5 +511,8 @@ if __name__ == "__main__":
     feature_names_simple = ['Gender_uknown', 'Female', 'Male', 'Location_Colon', 'Location_Duodenal','Location_Esophagus','Location_Gastric','Location_other', 'Location_Rectum','Location_SmallBowel', 'Tumstat_diag_other', 'Tumstat_diag_localized', 'Tumstat_diag_advanced', 'Tumstat_diag_Meta', 'Tumstat_diag_other_2','Age', 'Primary_tumor_size','Largest_meta','Number_meta']
     feature_names_clinical = ['Gender_uknown', 'Female', 'Male', 'Location_Colon', 'Location_Duodenal','Location_Esophagus','Location_Gastric','Location_other', 'Location_Rectum','Location_SmallBowel', 'Tumstat_diag_other', 'Tumstat_diag_localized', 'Tumstat_diag_advanced', 'Tumstat_diag_Meta', 'Tumstat_diag_other_2','Epitheloid_cell', 'Mixed_type', 'Spindle_cell', 'Negative_IHCD', 'Positive_IHCD', 'Negative_DOG','Positive_DOG', 'KIT_absent', 'KIT_present', 'Exon_11','Exon_13','Exon_17','Exon_9', 'No_Exon_Location', 'KIT2_no', 'KIT2_yes', 'BRAF_absent', 'BRAF_present', 'Age', 'Primary_tumor_size','Largest_meta','Number_meta','Mitotic_count']
     plt.figure()
-    shap.summary_plot(shap_values, features=test_features, feature_names=feature_names_clinical, max_display=10)
-    plt.savefig('/trinity/home/r098372/pycox/figures/Shapley_analysis/clinical_RFS_2.png')
+    shap.summary_plot(shap_values, features=test_features, feature_names=feature_names_simple, max_display=10)
+    plt.title('SHAP Summary Plot for Features M1 (Survival)')
+    plt.savefig('/trinity/home/r098372/pycox/figures/Thesis_figures/Shapley_M1_surv.png')
+
+    

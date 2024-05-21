@@ -76,7 +76,7 @@ for subject_name in os.listdir(image_path):
         # Convert the subject_series to a DataFrame with the same column name as labels_death
         subject_df = pd.DataFrame({'participant_id': subject_series})
         # Use str.replace on the subject_series to remove leading zeroes
-        subject_info = labels_RFS.merge(subject_df, on='participant_id', how='inner')
+        subject_info = labels_death.merge(subject_df, on='participant_id', how='inner')
         print(subject_info)
 
         # Check if the 'NIFTI' directory exists for the current subject
@@ -96,8 +96,8 @@ for subject_name in os.listdir(image_path):
     patient_dict = {
         'name': subject_name,
         'img': nifti_path,
-        'duration': subject_info['Duration_RFS'].values[0],
-        'event': subject_info['Event_RFS'].values[0]
+        'duration': subject_info['Duration_death'].values[0],
+        'event': subject_info['Event_death'].values[0]
     }
 
     # Append this all to a list
@@ -137,6 +137,7 @@ device = "cuda" if torch.cuda.is_available() else "cpu"
 seed = 42
 torch.manual_seed(seed)
 torch.cuda.manual_seed(seed)
+pl.seed_everything(seed)
 
 # -------------------------------------------------------------------------------------------------------------------------------
 '''
@@ -154,9 +155,10 @@ class SurvivalImaging(pl.LightningModule):
             out_channels=2
         )
         self.model.to(device)
-        self.lr = 0.00001
+        self.lr = 0.000001
         self.loss_function = nn.CrossEntropyLoss()
         self.validation_step_outputs = []
+        self.training_step_outputs = []
 
         self.mlflow_logger = MLFlowLogger(experiment_name="classification_model", run_name="all_patients")
         mlflow.start_run()
@@ -262,6 +264,8 @@ class SurvivalImaging(pl.LightningModule):
         loss = self.loss_function(output, labels)
         predictions = torch.argmax(output, dim=1)
         self.log('train_loss', loss, on_epoch=True)
+        d = {"val_loss": loss, "predictions": predictions, "labels": labels}
+        self.training_step_outputs.append(d)
         return {"loss": loss, "predictions": predictions, "labels": labels}
 
     def validation_step(self, batch, batch_idx):
@@ -273,6 +277,24 @@ class SurvivalImaging(pl.LightningModule):
         d = {"val_loss": loss, "predictions": predictions, "labels": labels}
         self.validation_step_outputs.append(d)
         return {"loss": loss, "predictions": predictions, "labels": labels}
+
+    def on_train_epoch_end(self):
+        # Collect predictions and ground truth labels from all train batches
+        all_predictions = []
+        all_labels = []
+        for output in self.training_step_outputs:
+            all_predictions.extend(output['predictions'].cpu().numpy())
+            all_labels.extend(output['labels'].cpu().numpy())
+
+        all_predictions = np.array(all_predictions)
+        print(all_predictions)
+        all_labels = np.array(all_labels)
+        print(all_labels)
+
+        # Calculate accuracy
+        accuracy = self.accuracy_fn(all_labels, all_predictions)
+        self.log('train_accuracy', accuracy, on_epoch=True)
+        self.training_step_outputs.clear()
     
     def on_validation_epoch_end(self):
         # Collect predictions and ground truth labels from all validation batches
@@ -289,7 +311,7 @@ class SurvivalImaging(pl.LightningModule):
 
         # Calculate accuracy
         accuracy = self.accuracy_fn(all_labels, all_predictions)
-        self.log('accuracy', accuracy, on_epoch=True)
+        self.log('val_accuracy', accuracy, on_epoch=True)
         self.validation_step_outputs.clear()
         
     def on_train_end(self):
@@ -297,7 +319,7 @@ class SurvivalImaging(pl.LightningModule):
 
 
 # # ---------------------------------------------------------------------------------------------------------------------------------
-max_epochs = 100
+max_epochs = 99
 model = SurvivalImaging()
 
 # Start the trainer
