@@ -56,7 +56,7 @@ class SurvivalDataset(Dataset):
         :param threshold_value: (int) threshold value to filter out samples with 'y' values above this threshold
         :param sampling: (str) sampling strategy: "upsampling" or "downsampling"
         '''
-        self.h5_file = 'my_models/simple_model.h5'  # Default path to .h5 file
+        self.h5_file = 'my_models/simple_model_all_AGE.h5'  # Default path to .h5 file
         # loads data
         self.X, self.e, self.y = self._read_h5_file(is_train)
         # Remove NaN values

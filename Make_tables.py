@@ -52,7 +52,7 @@ def load_data_from_h5(filepath):
 
 # 1. I will start with my survival models
 # 1.1 Patients with available images
-filepath = 'my_models/simple_model_all_AGE.h5'
+filepath = 'my_models/simple_model_RFS_AGE.h5'
 train_df, test_df, combined_df = load_data_from_h5(filepath)
 print(combined_df)
 
@@ -80,7 +80,7 @@ print(len(combined_df))
 #     print(f"Count of 1.0 in column {column}: {count}")
 
 # # Select the columns x15 and y
-# new_columns = ['x15', 'y']
+# new_columns = ['x12', 'y']
 
 # # Calculate the mean and STD for each column
 # for column in new_columns:
@@ -110,7 +110,7 @@ for column, count in counts_per_column.items():
     print(f"Count of 1.0 in column {column}: {count}")
 
 # Select the columns x15 and y
-new_columns = ['x15', 'y']
+new_columns = ['x12', 'y']
 
 # Calculate the mean and STD for each column
 for column in new_columns:

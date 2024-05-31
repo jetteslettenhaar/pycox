@@ -62,10 +62,10 @@ class SurvivalDataset(Dataset):
         :param threshold_value: (int) threshold value to filter out samples with 'y' values above this threshold
         :param sampling: (str) sampling strategy: "upsampling" or "downsampling"
         '''
-        self.h5_file = 'my_models/simple_model_all_RFS_AGE.h5'  # Default path to .h5 file
+        self.h5_file = 'my_models/simple_model_all_AGE.h5'  # Default path to .h5 file
 
         # Define indices of the features you want to include
-        self.selected_features = [15, 16, 17, 18]  # Example indices, modify as per your requirements
+        self.selected_features = [0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 12, 13, 14, 15, 16, 17, 18]  # Example indices, modify as per your requirements
         # loads data
         self.X, self.e, self.y = self._read_h5_file(is_train)
         self.X = self.X[:, self.selected_features]
@@ -331,6 +331,57 @@ if __name__ == "__main__":
     train_dataloader = DataLoader(train_dataset, batch_size=len(train_dataset), shuffle=True)
     test_dataloader = DataLoader(test_dataset, batch_size=len(test_dataset))
 
+    # Define the number of folds for outer cross-validation
+    outer_k_folds = 5
+    max_epochs = 800
+
+    # Define outer K-fold cross-validation
+    outer_kfold = KFold(n_splits=outer_k_folds, shuffle=True, random_state=seed)
+
+    best_hyperparams_outer_folds = []
+    test_c_indices_outer_folds = []
+
+    # Outer cross-validation loop
+    for fold_idx, (train_indices, test_indices) in enumerate(outer_kfold.split(combined_dataset)):
+        print(f"Outer Fold: {fold_idx + 1}/{outer_k_folds}")
+
+        # Split data into train and test for outer fold
+        train_data_outer = torch.utils.data.Subset(combined_dataset, train_indices)
+        test_data_outer = torch.utils.data.Subset(combined_dataset, test_indices)
+
+        # Create custom dataloaders for outer fold
+        train_dataloader_outer = DataLoader(train_data_outer, batch_size=len(train_data_outer), shuffle=True)
+        test_dataloader_outer = DataLoader(test_data_outer, batch_size=len(test_data_outer))
+
+        dim_2 = 99  # Example hyperparameter, you should choose based on prior knowledge or experimentation
+        dim_3 = 55
+        drop = 0.22541305037492282
+        l2_reg = 13.152435544780317
+
+        # Create and train the model with the chosen hyperparameters
+        final_model_outer = Survivalmodel(input_dim=int(train_dataset.input_dim), dim_2=dim_2, dim_3=dim_3, drop=drop, l2_reg=l2_reg)
+        trainer_outer = pl.Trainer(max_epochs=max_epochs, logger=final_model_outer.mlflow_logger, accelerator='gpu', devices=1)
+        trainer_outer.fit(final_model_outer, train_dataloaders=train_dataloader_outer, val_dataloaders=test_dataloader_outer)
+
+        # Extract test C-index from the final training loop's metrics
+        test_c_index_outer_fold = trainer_outer.callback_metrics['val_c_index_objective']
+        print(f"Test C-index for Outer Fold {fold_idx + 1}: {test_c_index_outer_fold}")
+
+        # Store the test C-index for this outer fold
+        test_c_indices_outer_folds.append(test_c_index_outer_fold)
+
+    # Calculate the average test C-index over all outer folds
+    avg_test_c_index = np.mean(test_c_indices_outer_folds)
+
+    # Calculate 95% confidence interval for the test C-index
+    conf_interval = 1.96 * np.std(test_c_indices_outer_folds) / np.sqrt(len(test_c_indices_outer_folds))
+    lower_bound = avg_test_c_index - conf_interval
+    upper_bound = avg_test_c_index + conf_interval
+
+    print(f"Average Test C-index over {outer_k_folds} outer folds (simple surv): {avg_test_c_index}")
+    print(f"95% Confidence Interval: [{lower_bound}, {upper_bound}]")
+
+
     '''
     Now we are going to make a KM curve based on the division in risk prediction that is made by the model. 
     '''
@@ -339,7 +390,7 @@ if __name__ == "__main__":
     dim_3 = 55
     drop = 0.22541305037492282
     l2_reg = 13.152435544780317
-
+    
     # Create and train the model with the chosen hyperparameters
     final_model_KM = Survivalmodel(input_dim=int(train_dataset.input_dim), dim_2=dim_2, dim_3=dim_3, drop=drop, l2_reg=l2_reg)
     trainer_KM = pl.Trainer(max_epochs=max_epochs, logger=final_model_KM.mlflow_logger, accelerator='gpu', devices=1)
@@ -428,7 +479,7 @@ if __name__ == "__main__":
     plt.grid()
     plt.tight_layout()
     plt.show()
-    plt.savefig('/trinity/home/r098372/pycox/figures/Test/KM_DL_M1_RFS')
+    plt.savefig('/trinity/home/r098372/pycox/figures/Test/Test_mostimportant_gone_simplesurv')
 
     # Assuming you have the test dataset available
     test_features = test_dataset.X
@@ -451,4 +502,4 @@ if __name__ == "__main__":
     feature_names_clinical = ['Gender_uknown', 'Female', 'Male', 'Location_Colon', 'Location_Duodenal','Location_Esophagus','Location_Gastric','Location_other', 'Location_Rectum','Location_SmallBowel', 'Tumstat_diag_other', 'Tumstat_diag_localized', 'Tumstat_diag_advanced', 'Tumstat_diag_Meta', 'Tumstat_diag_other_2','Epitheloid_cell', 'Mixed_type', 'Spindle_cell', 'Negative_IHCD', 'Positive_IHCD', 'Negative_DOG','Positive_DOG', 'KIT_absent', 'KIT_present', 'Exon_11','Exon_13','Exon_17','Exon_9', 'No_Exon_Location', 'KIT2_no', 'KIT2_yes', 'BRAF_absent', 'BRAF_present', 'Age', 'Primary_tumor_size','Largest_meta','Number_meta','Mitotic_count']
     plt.figure()
     shap.summary_plot(shap_values, features=test_features, max_display=10)
-    plt.savefig('/trinity/home/r098372/pycox/figures/Test/Shap_simple_RFS.png')
+    plt.savefig('/trinity/home/r098372/pycox/figures/Test/TestSHAP_mostimportant_gone_simplesurv')

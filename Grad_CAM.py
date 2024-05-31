@@ -76,7 +76,7 @@ for subject_name in os.listdir(image_path):
         # Convert the subject_series to a DataFrame with the same column name as labels_death
         subject_df = pd.DataFrame({'participant_id': subject_series})
         # Use str.replace on the subject_series to remove leading zeroes
-        subject_info = labels_RFS.merge(subject_df, on='participant_id', how='inner')
+        subject_info = labels_death.merge(subject_df, on='participant_id', how='inner')
         print(subject_info)
 
         # Check if the 'NIFTI' directory exists for the current subject

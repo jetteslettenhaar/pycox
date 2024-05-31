@@ -57,7 +57,7 @@ def load_data_from_h5(filepath):
 
 # 1. I will start with my survival models
 # 1.1 Patients with available images
-filepath = 'my_models/simple_model_all_AGE.h5'
+filepath = 'my_models/clinical_model_all_AGE.h5'
 train_df, test_df, combined_df = load_data_from_h5(filepath)
 print(combined_df)
 
