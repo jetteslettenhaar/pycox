@@ -15,6 +15,8 @@ import pandas as pd
 import os
 import nibabel as nib
 from sklearn.model_selection import train_test_split
+from sklearn.model_selection import StratifiedKFold
+from sklearn.metrics import roc_auc_score
 
 from monai.networks.nets import Densenet121
 from monai.utils import set_determinism
@@ -41,6 +43,11 @@ import torchsummary
 import h5py
 from lifelines import CoxPHFitter
 from lifelines import KaplanMeierFitter
+
+from torch.autograd import function
+from torch.autograd import Variable
+from scipy.ndimage import zoom
+import matplotlib as plt
 
 '''
  We need to start by actually making a classification between the two models. So we will use the CPH model and divide them into either low or high or intermediate risk.
@@ -76,7 +83,7 @@ for subject_name in os.listdir(image_path):
         # Convert the subject_series to a DataFrame with the same column name as labels_death
         subject_df = pd.DataFrame({'participant_id': subject_series})
         # Use str.replace on the subject_series to remove leading zeroes
-        subject_info = labels_RFS.merge(subject_df, on='participant_id', how='inner')
+        subject_info = labels_death.merge(subject_df, on='participant_id', how='inner')
         print(subject_info)
 
         # Check if the 'NIFTI' directory exists for the current subject
@@ -147,7 +154,7 @@ Now we need to actually make the model which contains 'prepare_data' function to
 
 
 class SurvivalImaging(pl.LightningModule):
-    def __init__(self):
+    def __init__(self, train_files, val_files):
         super().__init__()
         self.model = Densenet121(
             spatial_dims=3,
@@ -159,6 +166,9 @@ class SurvivalImaging(pl.LightningModule):
         self.loss_function = nn.CrossEntropyLoss()
         self.validation_step_outputs = []
         self.training_step_outputs = []
+        
+        self.train_files = train_files
+        self.val_files = val_files
 
         self.mlflow_logger = MLFlowLogger(experiment_name="classification_model", run_name="all_patients")
         mlflow.start_run()
@@ -170,43 +180,11 @@ class SurvivalImaging(pl.LightningModule):
         return self.model(x)
 
     def prepare_data(self):
-        data_dict = patient_info_list_filtered
-        train_files, val_files = train_test_split(data_dict, test_size=0.2, random_state=42)
-
-        # Set the seed again?
+        # Set the seed again
         set_determinism(seed=42)
 
-        # Resample images using median spacing
-        '''
-        We will use (or at least should, but dont get the formula yet) WL + (WW/2) for the upper grey level and WL - (WW/2) for the lower level
-        I will use the values for soft tissue in the abdomen for now, so -125 to +225
-        '''
-
         # Define transforms
-        train_transforms = Compose([
-            LoadImaged(keys=['img']),
-            EnsureChannelFirstd(keys=['img']),
-            Spacingd(
-                keys=['img'],
-                pixdim=(1, 1, 3),   # Using median in all direction resulted in GPU memory issue (CuDNN error)
-                mode=('bilinear'),
-            ),
-            ScaleIntensityRanged(
-                keys=["img"],
-                a_min=-125,
-                a_max=225,
-                b_min=0.0,
-                b_max=1.0,
-                clip=True,
-            ),
-            SpatialPadd(
-                keys=["img"],
-                spatial_size=(32, 32, 32),
-                mode="minimum",
-            ),
-        ])
-
-        val_transforms = Compose([
+        transforms = Compose([
             LoadImaged(keys=['img']),
             EnsureChannelFirstd(keys=['img']),
             Spacingd(
@@ -229,107 +207,176 @@ class SurvivalImaging(pl.LightningModule):
             ),
         ])
 
-        self.train_ds = Dataset(data = train_files, transform = train_transforms)
-        self.val_ds = Dataset(data = val_files, transform = val_transforms)
-        # Print the lengths of your training and validation datasets
-        print("Length of training dataset:", len(self.train_ds))
-        print("Length of validation dataset:", len(self.val_ds))
-
+        self.train_ds = Dataset(data=self.train_files, transform=transforms)
+        self.val_ds = Dataset(data=self.val_files, transform=transforms)
 
     def train_dataloader(self):
-        train_dataloader = DataLoader(self.train_ds, batch_size=1, shuffle=True)  # Als alles dezelfde size is, kan dit groter
-        return train_dataloader
+        return DataLoader(self.train_ds, batch_size=1, shuffle=True)
 
     def val_dataloader(self):
-        val_dataloader = DataLoader(self.val_ds, batch_size=1)
-        return val_dataloader
-    
+        return DataLoader(self.val_ds, batch_size=1)
+
     def configure_optimizers(self):
-        optimizer = torch.optim.Adam(self.parameters(), lr=self.lr)        # Learning rate is hyperparameter! (normal is 0.001)
-        return optimizer
+        return torch.optim.Adam(self.parameters(), lr=self.lr)
 
     def accuracy_fn(self, y_true, y_pred):
-        # Convert NumPy arrays to PyTorch tensors
-        y_true_tensor = torch.tensor(y_true)
-        y_pred_tensor = torch.tensor(y_pred)
+        if len(y_pred) == 0:
+            return 0  # Handle division by zero gracefully
+        else:
+            y_true_tensor = torch.tensor(y_true)
+            y_pred_tensor = torch.tensor(y_pred)
+            correct = torch.eq(y_true_tensor, y_pred_tensor).sum().item()
+            acc = (correct / len(y_pred)) * 100
+            return acc
 
-        # Use torch.eq() to compare tensors
-        correct = torch.eq(y_true_tensor, y_pred_tensor).sum().item() 
-        acc = (correct / len(y_pred)) * 100 
-        return acc
-    
     def training_step(self, batch, batch_idx):
         images, labels = batch["img"], batch["risk_group"]
         output = self.forward(images)
         loss = self.loss_function(output, labels)
         predictions = torch.argmax(output, dim=1)
+        probabilities = torch.softmax(output, dim=1)[:, 1]
         self.log('train_loss', loss, on_epoch=True)
-        d = {"val_loss": loss, "predictions": predictions, "labels": labels}
+        d = {"val_loss": loss, "predictions": predictions, "labels": labels, "probabilities": probabilities}
         self.training_step_outputs.append(d)
-        return {"loss": loss, "predictions": predictions, "labels": labels}
+        return {"loss": loss, "predictions": predictions, "labels": labels, "probabilities": probabilities}
 
     def validation_step(self, batch, batch_idx):
         images, labels = batch["img"], batch["risk_group"]
         output = self.forward(images)
         loss = self.loss_function(output, labels)
         predictions = torch.argmax(output, dim=1)
+        probabilities = torch.softmax(output, dim=1)[:, 1]
         self.log('validation_loss', loss, on_epoch=True)
-        d = {"val_loss": loss, "predictions": predictions, "labels": labels}
+        d = {"val_loss": loss, "predictions": predictions, "labels": labels, "probabilities": probabilities}
         self.validation_step_outputs.append(d)
-        return {"loss": loss, "predictions": predictions, "labels": labels}
+        return {"loss": loss, "predictions": predictions, "labels": labels, "probabilities": probabilities}
 
     def on_train_epoch_end(self):
-        # Collect predictions and ground truth labels from all train batches
         all_predictions = []
         all_labels = []
+        all_probabilities = []
         for output in self.training_step_outputs:
             all_predictions.extend(output['predictions'].cpu().numpy())
+            all_probabilities.extend(output['probabilities'].cpu().detach().numpy())
             all_labels.extend(output['labels'].cpu().numpy())
 
         all_predictions = np.array(all_predictions)
         print(all_predictions)
+        all_probabilities = np.array(all_probabilities)
+        print(all_probabilities)
         all_labels = np.array(all_labels)
         print(all_labels)
 
-        # Calculate accuracy
         accuracy = self.accuracy_fn(all_labels, all_predictions)
+        roc_auc = roc_auc_score(all_labels, all_probabilities)
         self.log('train_accuracy', accuracy, on_epoch=True)
+        self.log('train_roc', roc_auc, on_epoch=True)
         self.training_step_outputs.clear()
-    
+
     def on_validation_epoch_end(self):
-        # Collect predictions and ground truth labels from all validation batches
         all_predictions = []
         all_labels = []
+        all_probabilities = []
         for output in self.validation_step_outputs:
             all_predictions.extend(output['predictions'].cpu().numpy())
+            all_probabilities.extend(output['probabilities'].cpu().detach().numpy())
             all_labels.extend(output['labels'].cpu().numpy())
 
         all_predictions = np.array(all_predictions)
         print(all_predictions)
+        all_probabilities = np.array(all_probabilities)
+        print(all_probabilities)
         all_labels = np.array(all_labels)
         print(all_labels)
 
-        # Calculate accuracy
         accuracy = self.accuracy_fn(all_labels, all_predictions)
+        try:
+            roc_auc = roc_auc_score(all_labels, all_probabilities)
+        except ValueError:
+            roc_auc = 0.00
         self.log('val_accuracy', accuracy, on_epoch=True)
+        self.log('val_roc', roc_auc, on_epoch=True)
         self.validation_step_outputs.clear()
-        
+
     def on_train_end(self):
         mlflow.end_run()
 
+# Cross-validation
+n_splits = 5                    
+max_epochs = 99                                          # Dit moet 99 zijn, nu voor testen even dit
+kf = StratifiedKFold(n_splits=n_splits, shuffle=True, random_state=42)
+data_dict = patient_info_list_filtered
+fold = 0
+fold_accuracies = []
+fold_AUC = []
 
-# # ---------------------------------------------------------------------------------------------------------------------------------
-max_epochs = 99
-model = SurvivalImaging()
+# Create an array of risk group labels for stratification
+risk_group_labels = [patient_dict['risk_group'] for patient_dict in data_dict]
 
-# Start the trainer
-trainer = pl.Trainer(
-    max_epochs = max_epochs,
-    logger = model.mlflow_logger,
-    accelerator = 'gpu',
-    devices = 1,
-    accumulate_grad_batches=2,
-)
+for train_index, val_index in kf.split(data_dict, risk_group_labels):  # Die :5 moet er niet staan, maar is alleen voor testen!
+    train_files = [data_dict[i] for i in train_index]
+    val_files = [data_dict[i] for i in val_index]
+    
+    model = SurvivalImaging(train_files, val_files)
+    model.prepare_data()
 
-trainer.fit(model)
+    # Initialize trainer
+    trainer = pl.Trainer(
+        num_sanity_val_steps=0,
+        max_epochs=max_epochs,
+        logger=model.mlflow_logger,
+        accelerator='gpu',
+        devices=1,
+        accumulate_grad_batches=2,
+    )
+
+    # Train the model
+    print(f"Starting training for fold {fold + 1}/{n_splits}")
+    trainer.fit(model)
+
+    # Extract test C-index from the final training loop's metrics
+    accuracy_fold = trainer.callback_metrics['val_accuracy']
+    AUC_fold = trainer.callback_metrics['val_roc']
+
+    # Store the test C-index for this outer fold
+    fold_accuracies.append(accuracy_fold)
+    fold_AUC.append(AUC_fold)
+
+    # Print accuracy and ROC AUC for the current fold
+    print(f"Accuracy for fold {fold + 1}: {accuracy_fold:.2f}%")
+    print(f"ROC AUC for fold {fold + 1}: {AUC_fold:.2f}")
+
+    fold += 1
+
+# Calculate the average test C-index over all outer folds
+mean_accuracy = np.mean(fold_accuracies)
+std_deviation_accuracy = np.std(fold_accuracies)
+num_folds_accuracy = len(fold_accuracies)
+
+# Calculate 95% confidence interval for accuracy
+margin_of_error_accuracy = 1.96 * (std_deviation_accuracy / np.sqrt(num_folds_accuracy))
+lower_bound_accuracy = mean_accuracy - margin_of_error_accuracy
+upper_bound_accuracy = mean_accuracy + margin_of_error_accuracy
+
+print(f"Average accuracy: {mean_accuracy:.2f}%")
+print(f"95% confidence interval for accuracy: [{lower_bound_accuracy:.2f}%, {upper_bound_accuracy:.2f}%]")
+
+
+# Calculate average ROC AUC and confidence interval
+mean_roc_auc = np.mean(fold_AUC)
+std_deviation_roc_auc = np.std(fold_AUC)
+num_folds_roc_auc = len(fold_AUC)
+# Calculate 95% confidence interval for ROC AUC
+margin_of_error_roc_auc = 1.96 * (std_deviation_roc_auc / np.sqrt(num_folds_roc_auc))
+lower_bound_roc_auc = mean_roc_auc - margin_of_error_roc_auc
+upper_bound_roc_auc = mean_roc_auc + margin_of_error_roc_auc
+
+
+print(f"Average ROC AUC: {mean_roc_auc:.2f}")
+print(f"95% confidence interval for ROC AUC: [{lower_bound_roc_auc:.2f}, {upper_bound_roc_auc:.2f}]")
+
+
+
+
+
 
