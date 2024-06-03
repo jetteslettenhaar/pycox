@@ -15,10 +15,13 @@ import pandas as pd
 import os
 import nibabel as nib
 from sklearn.model_selection import train_test_split
+from sklearn.model_selection import StratifiedKFold
+from sklearn.metrics import roc_auc_score
 
 from monai.networks.nets import Densenet121
 from monai.utils import set_determinism
 from monai.data import Dataset
+from monai.visualize.class_activation_maps import GradCAM
 from monai.transforms import (
     Compose,
     LoadImaged,
@@ -29,7 +32,6 @@ from monai.transforms import (
     ScaleIntensityRanged,
 )
 
-import matplotlib.pyplot as plt
 import mlflow
 from pytorch_lightning.loggers import MLFlowLogger
 
@@ -41,6 +43,12 @@ import torchsummary
 import h5py
 from lifelines import CoxPHFitter
 from lifelines import KaplanMeierFitter
+
+from torch.autograd import function
+from torch.autograd import Variable
+from scipy.ndimage import zoom
+from PIL import Image
+
 
 '''
  We need to start by actually making a classification between the two models. So we will use the CPH model and divide them into either low or high or intermediate risk.
@@ -147,7 +155,7 @@ Now we need to actually make the model which contains 'prepare_data' function to
 
 
 class SurvivalImaging(pl.LightningModule):
-    def __init__(self):
+    def __init__(self, train_files, val_files):
         super().__init__()
         self.model = Densenet121(
             spatial_dims=3,
@@ -159,6 +167,9 @@ class SurvivalImaging(pl.LightningModule):
         self.loss_function = nn.CrossEntropyLoss()
         self.validation_step_outputs = []
         self.training_step_outputs = []
+        
+        self.train_files = train_files
+        self.val_files = val_files
 
         self.mlflow_logger = MLFlowLogger(experiment_name="classification_model", run_name="all_patients")
         mlflow.start_run()
@@ -170,43 +181,11 @@ class SurvivalImaging(pl.LightningModule):
         return self.model(x)
 
     def prepare_data(self):
-        data_dict = patient_info_list_filtered
-        train_files, val_files = train_test_split(data_dict, test_size=0.2, random_state=42)
-
-        # Set the seed again?
+        # Set the seed again
         set_determinism(seed=42)
 
-        # Resample images using median spacing
-        '''
-        We will use (or at least should, but dont get the formula yet) WL + (WW/2) for the upper grey level and WL - (WW/2) for the lower level
-        I will use the values for soft tissue in the abdomen for now, so -125 to +225
-        '''
-
         # Define transforms
-        train_transforms = Compose([
-            LoadImaged(keys=['img']),
-            EnsureChannelFirstd(keys=['img']),
-            Spacingd(
-                keys=['img'],
-                pixdim=(1, 1, 3),   # Using median in all direction resulted in GPU memory issue (CuDNN error)
-                mode=('bilinear'),
-            ),
-            ScaleIntensityRanged(
-                keys=["img"],
-                a_min=-125,
-                a_max=225,
-                b_min=0.0,
-                b_max=1.0,
-                clip=True,
-            ),
-            SpatialPadd(
-                keys=["img"],
-                spatial_size=(32, 32, 32),
-                mode="minimum",
-            ),
-        ])
-
-        val_transforms = Compose([
+        transforms = Compose([
             LoadImaged(keys=['img']),
             EnsureChannelFirstd(keys=['img']),
             Spacingd(
@@ -229,107 +208,164 @@ class SurvivalImaging(pl.LightningModule):
             ),
         ])
 
-        self.train_ds = Dataset(data = train_files, transform = train_transforms)
-        self.val_ds = Dataset(data = val_files, transform = val_transforms)
-        # Print the lengths of your training and validation datasets
-        print("Length of training dataset:", len(self.train_ds))
-        print("Length of validation dataset:", len(self.val_ds))
-
+        self.train_ds = Dataset(data=self.train_files, transform=transforms)
+        self.val_ds = Dataset(data=self.val_files, transform=transforms)
 
     def train_dataloader(self):
-        train_dataloader = DataLoader(self.train_ds, batch_size=1, shuffle=True)  # Als alles dezelfde size is, kan dit groter
-        return train_dataloader
+        return DataLoader(self.train_ds, batch_size=1, shuffle=True)
 
     def val_dataloader(self):
-        val_dataloader = DataLoader(self.val_ds, batch_size=1)
-        return val_dataloader
-    
+        return DataLoader(self.val_ds, batch_size=1)
+
     def configure_optimizers(self):
-        optimizer = torch.optim.Adam(self.parameters(), lr=self.lr)        # Learning rate is hyperparameter! (normal is 0.001)
-        return optimizer
+        return torch.optim.Adam(self.parameters(), lr=self.lr)
 
     def accuracy_fn(self, y_true, y_pred):
-        # Convert NumPy arrays to PyTorch tensors
-        y_true_tensor = torch.tensor(y_true)
-        y_pred_tensor = torch.tensor(y_pred)
+        if len(y_pred) == 0:
+            return 0  # Handle division by zero gracefully
+        else:
+            y_true_tensor = torch.tensor(y_true)
+            y_pred_tensor = torch.tensor(y_pred)
+            correct = torch.eq(y_true_tensor, y_pred_tensor).sum().item()
+            acc = (correct / len(y_pred)) * 100
+            return acc
 
-        # Use torch.eq() to compare tensors
-        correct = torch.eq(y_true_tensor, y_pred_tensor).sum().item() 
-        acc = (correct / len(y_pred)) * 100 
-        return acc
-    
     def training_step(self, batch, batch_idx):
         images, labels = batch["img"], batch["risk_group"]
         output = self.forward(images)
         loss = self.loss_function(output, labels)
         predictions = torch.argmax(output, dim=1)
+        probabilities = torch.softmax(output, dim=1)[:, 1]
         self.log('train_loss', loss, on_epoch=True)
-        d = {"val_loss": loss, "predictions": predictions, "labels": labels}
+        d = {"val_loss": loss, "predictions": predictions, "labels": labels, "probabilities": probabilities}
         self.training_step_outputs.append(d)
-        return {"loss": loss, "predictions": predictions, "labels": labels}
+        return {"loss": loss, "predictions": predictions, "labels": labels, "probabilities": probabilities}
 
     def validation_step(self, batch, batch_idx):
         images, labels = batch["img"], batch["risk_group"]
         output = self.forward(images)
         loss = self.loss_function(output, labels)
         predictions = torch.argmax(output, dim=1)
+        probabilities = torch.softmax(output, dim=1)[:, 1]
         self.log('validation_loss', loss, on_epoch=True)
-        d = {"val_loss": loss, "predictions": predictions, "labels": labels}
+        d = {"val_loss": loss, "predictions": predictions, "labels": labels, "probabilities": probabilities}
         self.validation_step_outputs.append(d)
-        return {"loss": loss, "predictions": predictions, "labels": labels}
+        return {"loss": loss, "predictions": predictions, "labels": labels, "probabilities": probabilities}
 
     def on_train_epoch_end(self):
-        # Collect predictions and ground truth labels from all train batches
         all_predictions = []
         all_labels = []
+        all_probabilities = []
         for output in self.training_step_outputs:
             all_predictions.extend(output['predictions'].cpu().numpy())
+            all_probabilities.extend(output['probabilities'].cpu().detach().numpy())
             all_labels.extend(output['labels'].cpu().numpy())
 
         all_predictions = np.array(all_predictions)
         print(all_predictions)
+        all_probabilities = np.array(all_probabilities)
+        print(all_probabilities)
         all_labels = np.array(all_labels)
         print(all_labels)
 
-        # Calculate accuracy
         accuracy = self.accuracy_fn(all_labels, all_predictions)
+        roc_auc = roc_auc_score(all_labels, all_probabilities)
         self.log('train_accuracy', accuracy, on_epoch=True)
+        self.log('train_roc', roc_auc, on_epoch=True)
         self.training_step_outputs.clear()
-    
+
     def on_validation_epoch_end(self):
-        # Collect predictions and ground truth labels from all validation batches
         all_predictions = []
         all_labels = []
+        all_probabilities = []
         for output in self.validation_step_outputs:
             all_predictions.extend(output['predictions'].cpu().numpy())
+            all_probabilities.extend(output['probabilities'].cpu().detach().numpy())
             all_labels.extend(output['labels'].cpu().numpy())
 
         all_predictions = np.array(all_predictions)
         print(all_predictions)
+        all_probabilities = np.array(all_probabilities)
+        print(all_probabilities)
         all_labels = np.array(all_labels)
         print(all_labels)
 
-        # Calculate accuracy
         accuracy = self.accuracy_fn(all_labels, all_predictions)
+        try:
+            roc_auc = roc_auc_score(all_labels, all_probabilities)
+        except ValueError:
+            roc_auc = 0.00
         self.log('val_accuracy', accuracy, on_epoch=True)
+        self.log('val_roc', roc_auc, on_epoch=True)
         self.validation_step_outputs.clear()
-        
+
     def on_train_end(self):
         mlflow.end_run()
 
+# Train test split
+data_dict = patient_info_list_filtered
+train_files, test_files = train_test_split(data_dict[:10], test_size=0.2, random_state=42)                 
+max_epochs = 3                                          # Dit moet 99 zijn, nu voor testen even dit
 
-# # ---------------------------------------------------------------------------------------------------------------------------------
-max_epochs = 99
-model = SurvivalImaging()
+model = SurvivalImaging(train_files, test_files)
+model.prepare_data()
+print(model)
 
-# Start the trainer
+# Initialize trainer
 trainer = pl.Trainer(
-    max_epochs = max_epochs,
-    logger = model.mlflow_logger,
-    accelerator = 'gpu',
-    devices = 1,
+    num_sanity_val_steps=0,
+    max_epochs=max_epochs,
+    logger=model.mlflow_logger,
+    accelerator='gpu',
+    devices=1,
     accumulate_grad_batches=2,
 )
 
 trainer.fit(model)
+
+# Extract test C-index from the final training loop's metrics
+accuracy_fold = trainer.callback_metrics['val_accuracy']
+print(accuracy_fold)
+AUC_fold = trainer.callback_metrics['val_roc']
+print(AUC_fold)
+
+
+'''
+Now we want to see what the model is actually looking at
+'''
+
+gradcam = GradCAM(nn_module=model, target_layers="model.features.denseblock4.denselayer16.layers.conv2")
+
+# Prepare your input data
+image_path = '/data/scratch/r098372/beelden/101_1000/NIFTI/2_thxabd__50__b31f.nii.gz'
+
+nifti_img = nib.load(image_path)
+
+# Get the image data as a numpy array
+image_data = nifti_img.get_fdata()
+
+# Convert numpy array to PyTorch tensor
+input_tensor = torch.tensor(image_data, dtype=torch.float)
+depth = input_tensor.shape[2]  # Assuming the depth is the third dimension
+
+# Add batch dimension if needed (assuming your model expects a batch of images)
+input_tensor = input_tensor.unsqueeze(0)
+input_tensor = input_tensor.unsqueeze(0)
+
+heatmap = gradcam(input_tensor, class_idx=0)
+
+print("Input tensor shape:", input_tensor.shape)
+print("Heatmap shape:", heatmap.shape)
+
+# Visualize the heatmap overlayed on the input image
+plt.figure()
+plt.imshow(input_tensor.squeeze().numpy()[:, :, depth//2], cmap='gray')
+plt.imshow(heatmap.squeeze().numpy()[:, :, depth//2], alpha=0.5, cmap='jet')
+plt.show()
+plt.savefig('/trinity/home/r098372/pycox/figures/Classification/GradCAM')
+
+
+
+
+
 
