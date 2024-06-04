@@ -84,7 +84,7 @@ for subject_name in os.listdir(image_path):
         # Convert the subject_series to a DataFrame with the same column name as labels_death
         subject_df = pd.DataFrame({'participant_id': subject_series})
         # Use str.replace on the subject_series to remove leading zeroes
-        subject_info = labels_death.merge(subject_df, on='participant_id', how='inner')
+        subject_info = labels_RFS.merge(subject_df, on='participant_id', how='inner')
         print(subject_info)
 
         # Check if the 'NIFTI' directory exists for the current subject
@@ -104,8 +104,8 @@ for subject_name in os.listdir(image_path):
     patient_dict = {
         'name': subject_name,
         'img': nifti_path,
-        'duration': subject_info['Duration_death'].values[0],
-        'event': subject_info['Event_death'].values[0]
+        'duration': subject_info['Duration_RFS'].values[0],
+        'event': subject_info['Event_RFS'].values[0]
     }
 
     # Append this all to a list
@@ -171,7 +171,7 @@ class SurvivalImaging(pl.LightningModule):
         self.train_files = train_files
         self.val_files = val_files
 
-        self.mlflow_logger = MLFlowLogger(experiment_name="classification_model", run_name="all_patients")
+        self.mlflow_logger = MLFlowLogger(experiment_name="classification_model", run_name="GRADCAM")
         mlflow.start_run()
         self.mlflow_logger.log_hyperparams({
             'lr': self.lr
@@ -305,7 +305,7 @@ class SurvivalImaging(pl.LightningModule):
 # Train test split
 data_dict = patient_info_list_filtered
 train_files, test_files = train_test_split(data_dict[:10], test_size=0.2, random_state=42)                 
-max_epochs = 3                                          # Dit moet 99 zijn, nu voor testen even dit
+max_epochs = 2                                          # Dit moet 99 zijn, nu voor testen even dit
 
 model = SurvivalImaging(train_files, test_files)
 model.prepare_data()
@@ -336,34 +336,39 @@ Now we want to see what the model is actually looking at
 
 gradcam = GradCAM(nn_module=model, target_layers="model.features.denseblock4.denselayer16.layers.conv2")
 
-# Prepare your input data
-image_path = '/data/scratch/r098372/beelden/101_1000/NIFTI/2_thxabd__50__b31f.nii.gz'
+# Iterate through the first 5 patients in your filtered list
+for i, patient_dict in enumerate(patient_info_list_filtered[:5]):
+    image_path = patient_dict['img']
+    
+    # Load the NIFTI image
+    nifti_img = nib.load(image_path)
+    
+    # Get the image data as a numpy array
+    image_data = nifti_img.get_fdata()
+    
+    # Convert numpy array to PyTorch tensor
+    input_tensor = torch.tensor(image_data, dtype=torch.float)
+    depth = input_tensor.shape[2]  # Assuming the depth is the third dimension
+    
+    # Add batch dimension if needed (assuming your model expects a batch of images)
+    input_tensor = input_tensor.unsqueeze(0)
+    input_tensor = input_tensor.unsqueeze(0)
+    
+    # Compute the heatmap using GradCAM
+    heatmap = gradcam(input_tensor, class_idx=0)
+    
+    print(f"Patient {i+1} - Input tensor shape:", input_tensor.shape)
+    print(f"Patient {i+1} - Heatmap shape:", heatmap.shape)
+    
+    # Visualize the heatmap overlayed on the input image
+    plt.figure()
+    plt.imshow(input_tensor.squeeze().numpy()[:, :, depth//2], cmap='gray')
+    plt.imshow(heatmap.squeeze().numpy()[:, :, depth//2], alpha=0.5, cmap='jet')
+    plt.title(f'Patient {i+1} GradCAM')
+    plt.savefig(f'/trinity/home/r098372/pycox/figures/Classification/GradCAM_Patient_{i+1}.png')
+    plt.close()
 
-nifti_img = nib.load(image_path)
-
-# Get the image data as a numpy array
-image_data = nifti_img.get_fdata()
-
-# Convert numpy array to PyTorch tensor
-input_tensor = torch.tensor(image_data, dtype=torch.float)
-depth = input_tensor.shape[2]  # Assuming the depth is the third dimension
-
-# Add batch dimension if needed (assuming your model expects a batch of images)
-input_tensor = input_tensor.unsqueeze(0)
-input_tensor = input_tensor.unsqueeze(0)
-
-heatmap = gradcam(input_tensor, class_idx=0)
-
-print("Input tensor shape:", input_tensor.shape)
-print("Heatmap shape:", heatmap.shape)
-
-# Visualize the heatmap overlayed on the input image
-plt.figure()
-plt.imshow(input_tensor.squeeze().numpy()[:, :, depth//2], cmap='gray')
-plt.imshow(heatmap.squeeze().numpy()[:, :, depth//2], alpha=0.5, cmap='jet')
-plt.show()
-plt.savefig('/trinity/home/r098372/pycox/figures/Classification/GradCAM')
-
+print("GradCAM visualizations for the first 5 patients have been saved.")
 
 
 
