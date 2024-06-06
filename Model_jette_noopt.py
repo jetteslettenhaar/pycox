@@ -500,6 +500,8 @@ if __name__ == "__main__":
     final_model_shap = Survivalmodel(input_dim=int(train_dataset.X.shape[1]), dim_2=dim_2, dim_3=dim_3, drop=drop, l2_reg=l2_reg)
     trainer_shap = pl.Trainer(max_epochs=max_epochs, logger=final_model_shap.mlflow_logger, accelerator='gpu', devices=1)
     trainer_shap.fit(final_model_shap, train_dataloaders=train_dataloader, val_dataloaders=test_dataloader)
+    test_c_index = trainer_shap.callback_metrics['val_c_index_objective']
+    print(test_c_index)
 
     # Step 4: Compute SHAP Values
     explainer = shap.DeepExplainer(final_model_shap, test_features_tensor)
@@ -508,11 +510,29 @@ if __name__ == "__main__":
     print(shap_values.shape)
 
     # Step 5: Visualize SHAP Values
-    feature_names_simple = ['Gender_uknown', 'Female', 'Male', 'Location_Colon', 'Location_Duodenal','Location_Esophagus','Location_Gastric','Location_other', 'Location_Rectum','Location_SmallBowel', 'Tumstat_diag_other', 'Tumstat_diag_localized', 'Tumstat_diag_advanced', 'Tumstat_diag_Meta', 'Tumstat_diag_other_2','Age', 'Primary_tumor_size','Largest_meta','Number_meta']
-    feature_names_clinical = ['Gender_uknown', 'Female', 'Male', 'Location_Colon', 'Location_Duodenal','Location_Esophagus','Location_Gastric','Location_other', 'Location_Rectum','Location_SmallBowel', 'Tumstat_diag_other', 'Tumstat_diag_localized', 'Tumstat_diag_advanced', 'Tumstat_diag_Meta', 'Tumstat_diag_other_2','Epitheloid_cell', 'Mixed_type', 'Spindle_cell', 'Negative_IHCD', 'Positive_IHCD', 'Negative_DOG','Positive_DOG', 'KIT_absent', 'KIT_present', 'Exon_11','Exon_13','Exon_17','Exon_9', 'No_Exon_Location', 'KIT2_no', 'KIT2_yes', 'BRAF_absent', 'BRAF_present', 'Age', 'Primary_tumor_size','Largest_meta','Number_meta','Mitotic_count']
+    feature_names_simple = [
+        'Gender unknown', 'Female', 'Male', 'Location Colon', 'Location Duodenal', 
+        'Location Esophagus', 'Location Gastric', 'Location other', 'Location Rectum', 
+        'Location Small Bowel', 'Tumor status diagnosed as other', 'Tumor status diagnosed as localized', 
+        'Tumor status diagnosed as advanced', 'Tumor status diagnosed as metastasized', 'Tumor status diagnosed as other 2', 
+        'Age', 'Primary tumor size', 'Largest metastasis', 'Number of metastasis'
+    ]
+
+    feature_names_clinical = [
+        'Gender unknown', 'Female', 'Male', 'Location Colon', 'Location Duodenal', 
+        'Location Esophagus', 'Location Gastric', 'Location other', 'Location Rectum', 
+        'Location Small Bowel', 'Tumor status diagnosed as other', 'Tumor status diagnosed as localized', 
+        'Tumor status diagnosed as advanced', 'Tumor status diagnosed as metastasized', 'Tumor status diagnosed as other 2', 
+        'Epitheloid cell', 'Mixed type', 'Spindle cell', 'Negative IHCD', 'Positive IHCD', 
+        'Negative DOG', 'Positive DOG', 'KIT absent', 'KIT present', 'KIT location Exon 11', 
+        'KIT location Exon 13', 'KIT location Exon 17', 'KIT location Exon 9', 'KIT No Exon location known', 'No second KIT mutation', 'Second KIT mutation', 
+        'BRAF absent', 'BRAF present', 'Age', 'Primary tumor size', 'Largest metastasis', 
+        'Number of metastasis', 'Mitotic count'
+    ]
+    
     plt.figure()
-    shap.summary_plot(shap_values, features=test_features, feature_names=feature_names_simple, max_display=10)
+    shap.summary_plot(shap_values, features=test_features, feature_names=feature_names_simple)
     plt.title('SHAP Summary Plot for Features M1 (Survival)')
-    plt.savefig('/trinity/home/r098372/pycox/figures/Thesis_figures/Shapley_M1_surv.png')
+    plt.savefig('/trinity/home/r098372/pycox/figures/Thesis_figures_V2/Shapley_M1_surv.png')
 
     

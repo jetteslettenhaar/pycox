@@ -1,7 +1,7 @@
 #!/bin/bash
 #SBATCH --ntasks=1     
 #SBATCH --mem=42G      
-#SBATCH --gres=gpu:1   
+#SBATCH --gres=gpu:1  
 #SBATCH -p hm  
 #SBATCH -t 100:00:00
 #SBATCH -o /trinity/home/r098372/pycox/output/out_%j.log
@@ -13,4 +13,4 @@ module load CUDA/11.3.1
 
 source /trinity/home/r098372/pycox/venv_new/bin/activate
 
-python Grad_CAM.py
+python Grad_CAM_V2.py

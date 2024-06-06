@@ -304,8 +304,8 @@ class SurvivalImaging(pl.LightningModule):
 
 # Train test split
 data_dict = patient_info_list_filtered
-train_files, test_files = train_test_split(data_dict[:10], test_size=0.2, random_state=42)                 
-max_epochs = 2                                          # Dit moet 99 zijn, nu voor testen even dit
+train_files, test_files = train_test_split(data_dict, test_size=0.2, random_state=42)                 
+max_epochs = 99                                          # Dit moet 99 zijn, nu voor testen even dit
 
 model = SurvivalImaging(train_files, test_files)
 model.prepare_data()
@@ -329,17 +329,19 @@ print(accuracy_fold)
 AUC_fold = trainer.callback_metrics['val_roc']
 print(AUC_fold)
 
+# Save the trained model
+torch.save(model.state_dict(), 'survival_imaging_model.pth')
 
 '''
 Now we want to see what the model is actually looking at
 '''
 
+model.to(device)
 gradcam = GradCAM(nn_module=model, target_layers="model.features.denseblock4.denselayer16.layers.conv2")
 
-# Iterate through the first 5 patients in your filtered list
-for i, patient_dict in enumerate(patient_info_list_filtered[:5]):
-    image_path = patient_dict['img']
-    
+image_paths = ['/data/scratch/r098372/beelden/101_1000/NIFTI/2_thxabd__50__b31f.nii.gz', '/data/scratch/r098372/beelden/101_1009/NIFTI/2_body_50_ce.nii.gz', '/data/scratch/r098372/beelden/101_1011/NIFTI/2_body_50_ce.nii.gz', '/data/scratch/r098372/beelden/101_1012/NIFTI/2_maagabdomen__30__b31f.nii.gz', '/data/scratch/r098372/beelden/101_1014/NIFTI/2_body_50_ce.nii.gz']
+for idx, image_path in enumerate(image_paths):
+
     # Load the NIFTI image
     nifti_img = nib.load(image_path)
     
@@ -355,17 +357,17 @@ for i, patient_dict in enumerate(patient_info_list_filtered[:5]):
     input_tensor = input_tensor.unsqueeze(0)
     
     # Compute the heatmap using GradCAM
-    heatmap = gradcam(input_tensor, class_idx=0)
+    heatmap = gradcam(input_tensor.to(device), class_idx=0)
     
-    print(f"Patient {i+1} - Input tensor shape:", input_tensor.shape)
-    print(f"Patient {i+1} - Heatmap shape:", heatmap.shape)
+    print(f"Patient {idx} - Input tensor shape:", input_tensor.shape)
+    print(f"Patient {idx} - Heatmap shape:", heatmap.shape)
     
     # Visualize the heatmap overlayed on the input image
     plt.figure()
-    plt.imshow(input_tensor.squeeze().numpy()[:, :, depth//2], cmap='gray')
-    plt.imshow(heatmap.squeeze().numpy()[:, :, depth//2], alpha=0.5, cmap='jet')
-    plt.title(f'Patient {i+1} GradCAM')
-    plt.savefig(f'/trinity/home/r098372/pycox/figures/Classification/GradCAM_Patient_{i+1}.png')
+    plt.imshow(input_tensor.squeeze().cpu().numpy()[:, :, depth // 2], cmap='gray')
+    plt.imshow(heatmap.squeeze().cpu().numpy()[:, :, depth // 2], alpha=0.5, cmap='jet')
+    plt.title(f'Patient GradCAM')
+    plt.savefig(f'/trinity/home/r098372/pycox/figures/Classification/GradCAM_Patient_{idx}.png')
     plt.close()
 
 print("GradCAM visualizations for the first 5 patients have been saved.")
