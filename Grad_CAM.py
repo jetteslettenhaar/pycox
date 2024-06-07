@@ -17,6 +17,7 @@ import nibabel as nib
 from sklearn.model_selection import train_test_split
 from sklearn.model_selection import StratifiedKFold
 from sklearn.metrics import roc_auc_score
+from sklearn.metrics import roc_curve
 
 from monai.networks.nets import Densenet121
 from monai.utils import set_determinism
@@ -293,6 +294,21 @@ class SurvivalImaging(pl.LightningModule):
         accuracy = self.accuracy_fn(all_labels, all_predictions)
         try:
             roc_auc = roc_auc_score(all_labels, all_probabilities)
+            # Compute ROC curve and ROC area
+            fpr, tpr, _ = roc_curve(all_labels, all_probabilities)
+            
+            # Plot ROC curve
+            plt.figure()
+            plt.plot(fpr, tpr, color='darkorange', lw=2, label=f'ROC curve (area = {roc_auc:.2f})')
+            plt.plot([0, 1], [0, 1], color='navy', lw=2, linestyle='--')
+            plt.xlim([0.0, 1.0])
+            plt.ylim([0.0, 1.05])
+            plt.xlabel('False Positive Rate')
+            plt.ylabel('True Positive Rate')
+            plt.title('Receiver Operating Characteristic')
+            plt.legend(loc="lower right")
+            plt.savefig("/trinity/home/r098372/pycox/figures/Classification/roc_curve.png")  # Save the ROC curve figure
+            plt.close()
         except ValueError:
             roc_auc = 0.00
         self.log('val_accuracy', accuracy, on_epoch=True)
@@ -329,48 +345,48 @@ print(accuracy_fold)
 AUC_fold = trainer.callback_metrics['val_roc']
 print(AUC_fold)
 
-# Save the trained model
-torch.save(model.state_dict(), 'survival_imaging_model.pth')
+# # Save the trained model
+# torch.save(model.state_dict(), 'survival_imaging_model.pth')
 
-'''
-Now we want to see what the model is actually looking at
-'''
+# '''
+# Now we want to see what the model is actually looking at
+# '''
 
-model.to(device)
-gradcam = GradCAM(nn_module=model, target_layers="model.features.denseblock4.denselayer16.layers.conv2")
+# model.to(device)
+# gradcam = GradCAM(nn_module=model, target_layers="model.features.denseblock4.denselayer16.layers.conv2")
 
-image_paths = ['/data/scratch/r098372/beelden/101_1000/NIFTI/2_thxabd__50__b31f.nii.gz', '/data/scratch/r098372/beelden/101_1009/NIFTI/2_body_50_ce.nii.gz', '/data/scratch/r098372/beelden/101_1011/NIFTI/2_body_50_ce.nii.gz', '/data/scratch/r098372/beelden/101_1012/NIFTI/2_maagabdomen__30__b31f.nii.gz', '/data/scratch/r098372/beelden/101_1014/NIFTI/2_body_50_ce.nii.gz']
-for idx, image_path in enumerate(image_paths):
+# image_paths = ['/data/scratch/r098372/beelden/101_1000/NIFTI/2_thxabd__50__b31f.nii.gz', '/data/scratch/r098372/beelden/101_1009/NIFTI/2_body_50_ce.nii.gz', '/data/scratch/r098372/beelden/101_1011/NIFTI/2_body_50_ce.nii.gz', '/data/scratch/r098372/beelden/101_1012/NIFTI/2_maagabdomen__30__b31f.nii.gz', '/data/scratch/r098372/beelden/101_1014/NIFTI/2_body_50_ce.nii.gz']
+# for idx, image_path in enumerate(image_paths):
 
-    # Load the NIFTI image
-    nifti_img = nib.load(image_path)
+#     # Load the NIFTI image
+#     nifti_img = nib.load(image_path)
     
-    # Get the image data as a numpy array
-    image_data = nifti_img.get_fdata()
+#     # Get the image data as a numpy array
+#     image_data = nifti_img.get_fdata()
     
-    # Convert numpy array to PyTorch tensor
-    input_tensor = torch.tensor(image_data, dtype=torch.float)
-    depth = input_tensor.shape[2]  # Assuming the depth is the third dimension
+#     # Convert numpy array to PyTorch tensor
+#     input_tensor = torch.tensor(image_data, dtype=torch.float)
+#     depth = input_tensor.shape[2]  # Assuming the depth is the third dimension
     
-    # Add batch dimension if needed (assuming your model expects a batch of images)
-    input_tensor = input_tensor.unsqueeze(0)
-    input_tensor = input_tensor.unsqueeze(0)
+#     # Add batch dimension if needed (assuming your model expects a batch of images)
+#     input_tensor = input_tensor.unsqueeze(0)
+#     input_tensor = input_tensor.unsqueeze(0)
     
-    # Compute the heatmap using GradCAM
-    heatmap = gradcam(input_tensor.to(device), class_idx=0)
+#     # Compute the heatmap using GradCAM
+#     heatmap = gradcam(input_tensor.to(device), class_idx=0)
     
-    print(f"Patient {idx} - Input tensor shape:", input_tensor.shape)
-    print(f"Patient {idx} - Heatmap shape:", heatmap.shape)
+#     print(f"Patient {idx} - Input tensor shape:", input_tensor.shape)
+#     print(f"Patient {idx} - Heatmap shape:", heatmap.shape)
     
-    # Visualize the heatmap overlayed on the input image
-    plt.figure()
-    plt.imshow(input_tensor.squeeze().cpu().numpy()[:, :, depth // 2], cmap='gray')
-    plt.imshow(heatmap.squeeze().cpu().numpy()[:, :, depth // 2], alpha=0.5, cmap='jet')
-    plt.title(f'Patient GradCAM')
-    plt.savefig(f'/trinity/home/r098372/pycox/figures/Classification/GradCAM_Patient_{idx}.png')
-    plt.close()
+#     # Visualize the heatmap overlayed on the input image
+#     plt.figure()
+#     plt.imshow(input_tensor.squeeze().cpu().numpy()[:, :, depth // 2], cmap='gray')
+#     plt.imshow(heatmap.squeeze().cpu().numpy()[:, :, depth // 2], alpha=0.5, cmap='jet')
+#     plt.title(f'Patient GradCAM')
+#     plt.savefig(f'/trinity/home/r098372/pycox/figures/Classification/GradCAM_Patient_{idx}.png')
+#     plt.close()
 
-print("GradCAM visualizations for the first 5 patients have been saved.")
+# print("GradCAM visualizations for the first 5 patients have been saved.")
 
 
 

@@ -491,10 +491,10 @@ if __name__ == "__main__":
 
     # Step 3: Prepare the Model
     # Manually choose hyperparameters
-    dim_2 = 99  # Example hyperparameter, you should choose based on prior knowledge or experimentation
-    dim_3 = 55
-    drop = 0.22541305037492282
-    l2_reg = 13.152435544780317
+    dim_2 = 95  # Example hyperparameter, you should choose based on prior knowledge or experimentation
+    dim_3 = 71
+    drop = 0.18436438636054864
+    l2_reg = 12.795963862534695
 
     # Create and train the model with the chosen hyperparameters
     final_model_shap = Survivalmodel(input_dim=int(train_dataset.X.shape[1]), dim_2=dim_2, dim_3=dim_3, drop=drop, l2_reg=l2_reg)
@@ -530,9 +530,8 @@ if __name__ == "__main__":
         'Number of metastasis', 'Mitotic count'
     ]
     
-    plt.figure()
-    shap.summary_plot(shap_values, features=test_features, feature_names=feature_names_simple)
-    plt.title('SHAP Summary Plot for Features M1 (Survival)')
-    plt.savefig('/trinity/home/r098372/pycox/figures/Thesis_figures_V2/Shapley_M1_surv.png')
+    # plt.figure()
+    # shap.summary_plot(shap_values, features=test_features, feature_names=feature_names_clinical)
+    # plt.savefig('/trinity/home/r098372/pycox/figures/Thesis_figures_V2/Shapley_M2_RFS.png')
 
     

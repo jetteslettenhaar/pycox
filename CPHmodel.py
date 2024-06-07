@@ -10,6 +10,7 @@ from lifelines import CoxPHFitter
 from lifelines import KaplanMeierFitter
 from lifelines.plotting import add_at_risk_counts
 from lifelines.utils import k_fold_cross_validation
+from lifelines.utils import concordance_index
 import matplotlib.pyplot as plt
 from lifelines.statistics import logrank_test
 
@@ -81,6 +82,14 @@ cph.fit(combined_df.loc['train'], duration_col='y', event_col='e')
 # After fitting, you can print out the summary of the fitted model
 cph.print_summary()
 
+# Predict the risk scores for the test data
+test_df = combined_df.loc['test']
+test_df['risk_score'] = cph.predict_partial_hazard(test_df)
+
+# Calculate the C-index for the test data
+c_index = concordance_index(test_df['y'], -test_df['risk_score'], test_df['e'])
+print("C-index for the test data:", c_index)
+
 # Perform k-fold cross validation
 # Specify number of folds
 num_folds = 5
@@ -100,53 +109,53 @@ upper_bound = mean_score + confidence_interval
 print("95% Confidence Interval:", (lower_bound, upper_bound))
 
 # ---------------------------------------------------------------------------------------------------------------------------
-'''
-If we want to make KM plots we also want to run this second part!!!
-'''
+# '''
+# If we want to make KM plots we also want to run this second part!!!
+# '''
 
-# Voorspel de Progression Risk Scores voor de test dataset met het getrainde CPH-model
-predicted_risk_scores_test = cph.predict_partial_hazard(combined_df.loc['test'])
-predicted_risk_scores_train = cph.predict_partial_hazard(combined_df.loc['train'])
+# # Voorspel de Progression Risk Scores voor de test dataset met het getrainde CPH-model
+# predicted_risk_scores_test = cph.predict_partial_hazard(combined_df.loc['test'])
+# predicted_risk_scores_train = cph.predict_partial_hazard(combined_df.loc['train'])
 
-percentile_low_train = np.percentile(predicted_risk_scores_train, 25)
-percentile_high_train = np.percentile(predicted_risk_scores_train, 75)
-print(percentile_low_train)
-print(percentile_high_train)
+# percentile_low_train = np.percentile(predicted_risk_scores_train, 25)
+# percentile_high_train = np.percentile(predicted_risk_scores_train, 75)
+# print(percentile_low_train)
+# print(percentile_high_train)
 
-# Use the percentiles obtained from the training set to categorize the risk groups on the test set
-risk_groups_test = np.where(predicted_risk_scores_test >= percentile_high_train, 'high-risk',
-                            np.where(predicted_risk_scores_test <= percentile_low_train, 'low-risk', 'unknown/intermediate'))
+# # Use the percentiles obtained from the training set to categorize the risk groups on the test set
+# risk_groups_test = np.where(predicted_risk_scores_test >= percentile_high_train, 'high-risk',
+#                             np.where(predicted_risk_scores_test <= percentile_low_train, 'low-risk', 'unknown/intermediate'))
 
-# Initialize lists to store survival data for each risk group
-high_risk_group = []
-low_risk_group = []
+# # Initialize lists to store survival data for each risk group
+# high_risk_group = []
+# low_risk_group = []
 
-# Split the test dataset into high-risk and low-risk groups
-for i, risk_pred in enumerate(predicted_risk_scores_test):
-    if risk_groups_test[i] == 'high-risk':
-        high_risk_group.append((combined_df.loc['test'].iloc[i]['y'], combined_df.loc['test'].iloc[i]['e']))
-    elif risk_groups_test[i] == 'low-risk':
-        low_risk_group.append((combined_df.loc['test'].iloc[i]['y'], combined_df.loc['test'].iloc[i]['e']))
+# # Split the test dataset into high-risk and low-risk groups
+# for i, risk_pred in enumerate(predicted_risk_scores_test):
+#     if risk_groups_test[i] == 'high-risk':
+#         high_risk_group.append((combined_df.loc['test'].iloc[i]['y'], combined_df.loc['test'].iloc[i]['e']))
+#     elif risk_groups_test[i] == 'low-risk':
+#         low_risk_group.append((combined_df.loc['test'].iloc[i]['y'], combined_df.loc['test'].iloc[i]['e']))
 
-# Create KaplanMeierFitter objects
-kmf_high = KaplanMeierFitter()
-kmf_low = KaplanMeierFitter()
+# # Create KaplanMeierFitter objects
+# kmf_high = KaplanMeierFitter()
+# kmf_low = KaplanMeierFitter()
 
-# Fit the models for high-risk and low-risk groups
-y_high, e_high = zip(*high_risk_group)
-y_low, e_low = zip(*low_risk_group)
+# # Fit the models for high-risk and low-risk groups
+# y_high, e_high = zip(*high_risk_group)
+# y_low, e_low = zip(*low_risk_group)
 
-# Fit the models for high-risk and low-risk groups
-y_high = np.array(y_high)
-e_high = np.array(e_high)
-y_low = np.array(y_low)
-e_low = np.array(e_low)
+# # Fit the models for high-risk and low-risk groups
+# y_high = np.array(y_high)
+# e_high = np.array(e_high)
+# y_low = np.array(y_low)
+# e_low = np.array(e_low)
 
-# Perform log-rank test
-results = logrank_test(y_high, y_low, e_high, e_low)
+# # Perform log-rank test
+# results = logrank_test(y_high, y_low, e_high, e_low)
 
-# Print the results
-print("Log-rank test p-value:", results.p_value)
+# # Print the results
+# print("Log-rank test p-value:", results.p_value)
 
 
 # kmf_high.fit(y_high/365.5, e_high, label='High Risk Group')
