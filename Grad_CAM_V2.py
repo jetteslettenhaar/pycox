@@ -307,6 +307,8 @@ model.to(device)
 
 # Initialize GradCAM
 gradcam = GradCAM(nn_module=model, target_layers="model.features.denseblock4.denselayer16.layers.conv2")
+window_level = 40
+window_width=  400
 
 # Define image paths
 image_paths = [
@@ -315,25 +317,48 @@ image_paths = [
     '/data/scratch/r098372/beelden/101_1023/NIFTI/3_abdomen_maag__50__bf37__2.nii.gz'
 ]
 
+# Define transforms
+transforms = Compose([
+    LoadImaged(keys=['img']),
+    EnsureChannelFirstd(keys=['img']),
+    Spacingd(
+        keys=['img'],
+        pixdim=(1, 1, 3),
+        mode=('bilinear'),
+    ),
+    ScaleIntensityRanged(
+        keys=["img"],
+        a_min=-125,
+        a_max=225,
+        b_min=0.0,
+        b_max=1.0,
+        clip=True,
+    ),
+    SpatialPadd(
+        keys=["img"],
+        spatial_size=(32, 32, 32),
+        mode="minimum",
+    ),
+])
+
 # Create a figure for subplots
 fig, axes = plt.subplots(2, 3, figsize=(15, 10))
 
 for idx, image_path in enumerate(image_paths, start=1):
-    # Load the NIFTI image
-    nifti_img = nib.load(image_path)
+    # Apply the transforms to preprocess the image
+    preprocessed_data = transforms({'img': image_path})
     
-    # Get the image data as a numpy array
-    image_data = nifti_img.get_fdata()
-    
-    # Convert numpy array to PyTorch tensor
-    input_tensor = torch.tensor(image_data, dtype=torch.float)
-    depth = input_tensor.shape[2]  # Assuming the depth is the third dimension
+    # Convert preprocessed image to PyTorch tensor
+    preprocessed_tensor = torch.tensor(preprocessed_data['img'], dtype=torch.float)
     
     # Add batch dimension if needed (assuming your model expects a batch of images)
-    input_tensor = input_tensor.unsqueeze(0).unsqueeze(0)
+    preprocessed_tensor = preprocessed_tensor.unsqueeze(0)
+
+    input_tensor = preprocessed_tensor
+    depth = input_tensor.shape[4]
     
     # Compute the heatmap using GradCAM for class 0 (low risk)
-    heatmap_class_0 = gradcam(input_tensor.to(device), class_idx=0)
+    heatmap_class_0 = gradcam(preprocessed_tensor.to(device), class_idx=0)
     
     print(f"Patient {idx} - Input tensor shape:", input_tensor.shape)
     print(f"Patient {idx} - Heatmap shape:", heatmap_class_0.shape)
@@ -352,7 +377,7 @@ for idx, image_path in enumerate(image_paths, start=1):
 
 # Adjust layout
 plt.tight_layout()
-plt.savefig('/trinity/home/r098372/pycox/figures/Classification/GradCAM_LowRisk_Subplots.png')
+plt.savefig('/trinity/home/r098372/pycox/figures/Classification/GradCAM_LowRisk_Subplots_3.png')
 plt.close()
 
 print("GradCAM visualizations for low risk patients have been saved.")
