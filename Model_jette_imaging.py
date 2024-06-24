@@ -195,10 +195,10 @@ class SurvivalImaging(pl.LightningModule):
         self.model.to(device)
         self.l2_reg = l2_reg
         self.regularization = Regularization(order=2, weight_decay=self.l2_reg)
-        self.lr = 0.01
+        self.lr = 0.0001
         self.lr_decay_rate = 0.005
 
-        self.mlflow_logger = MLFlowLogger(experiment_name="imaging_model", run_name="test_run_image_check")
+        self.mlflow_logger = MLFlowLogger(experiment_name="imaging_model", run_name="test_report")
         mlflow.start_run()
         self.mlflow_logger.log_hyperparams({
             'l2_reg': l2_reg,
@@ -434,21 +434,21 @@ class SurvivalImaging(pl.LightningModule):
         print("The loss is", epoch_loss)
 
         # Calculate C-index for the epoch
-        # c_index_epoch = self.c_index(-aggregated_risk_pred, aggregated_y, aggregated_e)
+        c_index_epoch = self.c_index(-aggregated_risk_pred, aggregated_y, aggregated_e)
 
         # Log aggregated loss and C-index for the epoch
-        # self.mlflow_logger.log_metrics({'val_c_index': c_index_epoch})
+        self.mlflow_logger.log_metrics({'val_c_index': c_index_epoch})
         self.mlflow_logger.log_metrics({'val_loss': epoch_loss.item()})
         # Log aggregated loss and C-index for the epoch
         self.log('val_loss', epoch_loss.item())
-        # self.log('val_c_index', c_index_epoch)
+        self.log('val_c_index', c_index_epoch)
         self.validation_step_outputs.clear()  # free memory
     
     def on_train_end(self):
         mlflow.end_run()
 
 # ---------------------------------------------------------------------------------------------------------------------------------
-max_epochs = 5
+max_epochs = 99
 l2_reg = 10
 model = SurvivalImaging(l2_reg)
 

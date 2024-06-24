@@ -13,4 +13,4 @@ module load CUDA/11.3.1
 
 source /trinity/home/r098372/pycox/venv_new/bin/activate
 
-python Grad_CAM_V2.py
+python Model_jette_imaging.py

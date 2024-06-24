@@ -356,6 +356,7 @@ for idx, image_path in enumerate(image_paths, start=1):
 
     input_tensor = preprocessed_tensor
     depth = input_tensor.shape[4]
+    depth = depth + 20
     
     # Compute the heatmap using GradCAM for class 0 (low risk)
     heatmap_class_0 = gradcam(preprocessed_tensor.to(device), class_idx=0)
@@ -371,13 +372,17 @@ for idx, image_path in enumerate(image_paths, start=1):
     axes[0, row].set_title(f'Patient {idx} - Original')
 
     # Heatmap for class 0
-    axes[1, row].imshow(input_tensor.squeeze().cpu().numpy()[:, :, depth // 2], cmap='gray')
-    axes[1, row].imshow(heatmap_class_0.squeeze().cpu().numpy()[:, :, depth // 2], alpha=0.5, cmap='jet')
+    im = axes[1, row].imshow(input_tensor.squeeze().cpu().numpy()[:, :, depth // 2], cmap='gray')
+    im = axes[1, row].imshow(heatmap_class_0.squeeze().cpu().numpy()[:, :, depth // 2], alpha=0.5, cmap='jet')
     axes[1, row].set_title(f'Patient {idx} - GradCAM Class 0')
+    
+    # Add colorbar next to each heatmap
+    cbar = plt.colorbar(im, ax=axes[1, row], fraction=0.046, pad=0.04)
+    cbar.set_label('Heatmap Intensity')
 
 # Adjust layout
 plt.tight_layout()
-plt.savefig('/trinity/home/r098372/pycox/figures/Classification/GradCAM_LowRisk_Subplots_3.png')
+plt.savefig('/trinity/home/r098372/pycox/figures/Classification/GradCAM_LowRisk_Subplots_7.png')
 plt.close()
 
 print("GradCAM visualizations for low risk patients have been saved.")
